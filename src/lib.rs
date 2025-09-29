@@ -2,8 +2,7 @@ pub mod cli;
 pub mod crypto;
 pub mod file;
 
-// Реэкспортируем ключевые структуры для удобства использования
-pub use cli::{Cli, Algorithm, Mode};
+pub use cli::{Cli, Algorithm, Mode, Operation}; 
 pub use crypto::AesEcb;
 
 #[cfg(test)]
@@ -24,8 +23,9 @@ mod tests {
 
     #[test]
     fn test_cli_enum_values() {
-        // Проверяем что enum'ы работают
         let _algo = Algorithm::Aes;
         let _mode = Mode::Ecb;
+        let _op = Operation::Encrypt;
+        let _op = Operation::Decrypt;
     }
 }
