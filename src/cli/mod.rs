@@ -1,3 +1,3 @@
 pub mod parser;
 
-pub use parser::{Cli, Algorithm, Mode, Operation};
+pub use parser::{Cli, Mode, Operation};

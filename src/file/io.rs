@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::Path;
 use anyhow::{Result, anyhow};
+use rand::RngCore;
+
+const IV_SIZE: usize = 16;
 
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| {
@@ -20,6 +23,31 @@ pub fn write_file(path: &Path, data: &[u8]) -> Result<()> {
     })
 }
 
+pub fn generate_iv() -> [u8; IV_SIZE] {
+    let mut iv = [0u8; IV_SIZE];
+    rand::thread_rng().fill_bytes(&mut iv);
+    iv
+}
+
+pub fn extract_iv_from_file(data: &[u8]) -> Result<([u8; IV_SIZE], &[u8])> {
+    if data.len() < IV_SIZE {
+        return Err(anyhow!("File too short to contain IV"));
+    }
+
+    let mut iv = [0u8; IV_SIZE];
+    iv.copy_from_slice(&data[..IV_SIZE]);
+    let ciphertext = &data[IV_SIZE..];
+
+    Ok((iv, ciphertext))
+}
+
+pub fn prepend_iv_to_data(iv: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(iv.len() + data.len());
+    result.extend_from_slice(iv);
+    result.extend_from_slice(data);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -29,9 +57,9 @@ mod tests {
     fn test_read_write_file() {
         let temp_file = NamedTempFile::new().unwrap();
         let test_data = b"Hello, CryptoCore!";
-        
+
         write_file(temp_file.path(), test_data).unwrap();
-        
+
         let read_data = read_file(temp_file.path()).unwrap();
         assert_eq!(test_data, &read_data[..]);
     }
@@ -43,9 +71,47 @@ mod tests {
     }
 
     #[test]
-    fn test_write_to_nonexistent_directory() {
-        let path = Path::new("C:/nonexistent_test_directory_12345/test.txt");
-        let result = write_file(path, b"test");
-        let _ = result; 
+    fn test_generate_iv() {
+        let iv1 = generate_iv();
+        let iv2 = generate_iv();
+
+        assert_eq!(iv1.len(), IV_SIZE);
+        assert_eq!(iv2.len(), IV_SIZE);
+        assert_ne!(iv1, iv2);
+    }
+
+    #[test]
+    fn test_extract_iv_from_file() {
+        let iv = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10];
+        let data = b"ciphertext data";
+
+        let mut full_data = Vec::new();
+        full_data.extend_from_slice(&iv);
+        full_data.extend_from_slice(data);
+
+        let (extracted_iv, extracted_data) = extract_iv_from_file(&full_data).unwrap();
+
+        assert_eq!(iv, extracted_iv);
+        assert_eq!(data, extracted_data);
+    }
+
+    #[test]
+    fn test_extract_iv_from_short_file() {
+        let short_data = b"short";
+        let result = extract_iv_from_file(short_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prepend_iv_to_data() {
+        let iv = [0xFF; 16];
+        let data = b"test data";
+
+        let result = prepend_iv_to_data(&iv, data);
+
+        assert_eq!(result.len(), iv.len() + data.len());
+        assert_eq!(&result[..16], &iv);
+        assert_eq!(&result[16..], data);
     }
 }

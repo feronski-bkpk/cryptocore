@@ -2,29 +2,29 @@ pub mod cli;
 pub mod crypto;
 pub mod file;
 
-pub use cli::{Cli, Algorithm, Mode, Operation}; 
-pub use crypto::AesEcb;
+pub use cli::{Cli, Mode, Operation};
+pub use crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_aes_creation() {
-        let result = AesEcb::new("00112233445566778899aabbccddeeff");
+    fn test_ecb_creation() {
+        let result = Ecb::new("00112233445566778899aabbccddeeff");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_invalid_key() {
-        let result = AesEcb::new("invalid");
+        let result = Ecb::new("invalid");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_cli_enum_values() {
-        let _algo = Algorithm::Aes;
         let _mode = Mode::Ecb;
+        let _mode = Mode::Cbc;
         let _op = Operation::Encrypt;
         let _op = Operation::Decrypt;
     }
