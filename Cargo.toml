@@ -2,6 +2,14 @@
 name = "cryptocore"
 version = "0.2.0"
 edition = "2021"
+description = "Command-line utility for file encryption and decryption using AES-128 in various modes"
+authors = ["feronski.bkpk@gmail.com"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/feronski-bkpk/cryptocore"
+repository = "https://github.com/feronski-bkpk/cryptocore"
+keywords = ["crypto", "encryption", "aes", "cli"]
+categories = ["command-line-utilities", "cryptography"]
 
 [profile.release]
 opt-level = 3

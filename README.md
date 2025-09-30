@@ -39,6 +39,8 @@ cargo build --release
 ## Использование
 
 ### Шифрование (с автоматической генерацией IV):
+
+**Bash/Linux:**
 ```bash
 # Для режимов с IV (CBC, CFB, OFB, CTR) - IV генерируется автоматически
 cryptocore --algorithm aes --mode cbc --operation encrypt \
@@ -47,7 +49,21 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
   --output ciphertext.bin
 ```
 
+**PowerShell:**
+```powershell
+# Для режимов с IV (CBC, CFB, OFB, CTR) - IV генерируется автоматически
+.\cryptocore --algorithm aes --mode cbc --operation encrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --input plaintext.txt `
+  --output ciphertext.bin
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input plaintext.txt --output ciphertext.bin
+```
+
 ### Дешифрование (чтение IV из файла):
+
+**Bash/Linux:**
 ```bash
 # IV автоматически читается из начала файла
 cryptocore --algorithm aes --mode cbc --operation decrypt \
@@ -56,7 +72,21 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
   --output decrypted.txt
 ```
 
+**PowerShell:**
+```powershell
+# IV автоматически читается из начала файла
+.\cryptocore --algorithm aes --mode cbc --operation decrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --input ciphertext.bin `
+  --output decrypted.txt
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
+```
+
 ### Дешифрование с указанием IV:
+
+**Bash/Linux:**
 ```bash
 # IV указывается явно через --iv
 cryptocore --algorithm aes --mode cbc --operation decrypt \
@@ -66,7 +96,22 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
   --output decrypted.txt
 ```
 
+**PowerShell:**
+```powershell
+# IV указывается явно через --iv
+.\cryptocore --algorithm aes --mode cbc --operation decrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --iv aabbccddeeff00112233445566778899 `
+  --input ciphertext.bin `
+  --output decrypted.txt
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input ciphertext.bin --output decrypted.txt
+```
+
 ### ECB режим (без IV):
+
+**Bash/Linux:**
 ```bash
 # Шифрование
 cryptocore --algorithm aes --mode ecb --operation encrypt \
@@ -79,6 +124,25 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
   --key 00112233445566778899aabbccddeeff \
   --input ciphertext.bin \
   --output decrypted.txt
+```
+
+**PowerShell:**
+```powershell
+# Шифрование
+.\cryptocore --algorithm aes --mode ecb --operation encrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --input plaintext.txt `
+  --output ciphertext.bin
+
+# Дешифрование
+.\cryptocore --algorithm aes --mode ecb --operation decrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --input ciphertext.bin `
+  --output decrypted.txt
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode ecb --operation encrypt --key 00112233445566778899aabbccddeeff --input plaintext.txt --output ciphertext.bin
+.\cryptocore --algorithm aes --mode ecb --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
 ```
 
 ## Аргументы командной строки
@@ -165,6 +229,8 @@ make test-openssl
 ```
 
 ### Быстрая ручная проверка:
+
+**Bash/Linux:**
 ```bash
 # Создать тестовый файл
 echo "Hello CryptoCore Multi-Mode" > test.txt
@@ -186,6 +252,26 @@ diff test.txt test.cbc.dec && echo "УСПЕХ: CBC режим работает 
 rm test.txt test.cbc.enc test.cbc.dec
 ```
 
+**PowerShell:**
+```powershell
+# Создать тестовый файл
+echo "Hello CryptoCore Multi-Mode" > test.txt
+
+# Зашифровать в CBC режиме
+.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input test.txt --output test.cbc.enc
+
+# Расшифровать
+.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input test.cbc.enc --output test.cbc.dec
+
+# Проверить что файлы идентичны
+fc test.txt test.cbc.dec
+
+# Если файлы идентичны, вы увидите: "Сравнение файлов завершено. Различия не обнаружены."
+
+# Очистка
+Remove-Item test.txt, test.cbc.enc, test.cbc.dec
+```
+
 ### Модульные тесты:
 ```bash
 cargo test
@@ -199,6 +285,8 @@ cargo test --test integration_tests
 ## Интероперабельность с OpenSSL
 
 ### Шифрование CryptoCore → Дешифрование OpenSSL:
+
+**Bash/Linux:**
 ```bash
 # Шифруем нашим инструментом
 cryptocore --algorithm aes --mode cbc --operation encrypt \
@@ -215,7 +303,29 @@ openssl enc -aes-128-cbc -d -K 00112233445566778899aabbccddeeff \
   -in ciphertext.bin -out file.dec
 ```
 
+**PowerShell:**
+```powershell
+# Шифруем нашим инструментом
+.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input file.txt --output file.enc
+
+# Извлекаем IV и шифротекст с помощью PowerShell
+$content = [System.IO.File]::ReadAllBytes("file.enc")
+[System.IO.File]::WriteAllBytes("iv.bin", $content[0..15])
+[System.IO.File]::WriteAllBytes("ciphertext.bin", $content[16..($content.Length-1)])
+
+# Конвертируем IV в hex строку для OpenSSL
+$ivHex = -join ($content[0..15] | ForEach-Object { $_.ToString("x2") })
+
+# Дешифруем OpenSSL
+openssl enc -aes-128-cbc -d -K 00112233445566778899aabbccddeeff -iv $ivHex -in ciphertext.bin -out file.dec
+
+# Альтернативный упрощенный способ (OpenSSL сам читает IV из файла):
+# openssl enc -aes-128-cbc -d -K 00112233445566778899aabbccddeeff -in file.enc -out file.dec
+```
+
 ### Шифрование OpenSSL → Дешифрование CryptoCore:
+
+**Bash/Linux:**
 ```bash
 # Шифруем OpenSSL
 openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff \
@@ -227,6 +337,15 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
   --key 00112233445566778899aabbccddeeff \
   --iv aabbccddeeff00112233445566778899 \
   --input file.enc --output file.dec
+```
+
+**PowerShell:**
+```powershell
+# Шифруем OpenSSL
+openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv aabbccddeeff00112233445566778899 -in file.txt -out file.enc
+
+# Дешифруем нашим инструментом
+.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input file.enc --output file.dec
 ```
 
 ## Технические детали
@@ -276,6 +395,8 @@ cryptocore/
 ## Примеры использования
 
 ### Зашифровать документ в CBC режиме:
+
+**Bash/Linux:**
 ```bash
 cryptocore --algorithm aes --mode cbc --operation encrypt \
   --key 2b7e151628aed2a6abf7158809cf4f3c \
@@ -283,7 +404,20 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
   --output document.pdf.enc
 ```
 
+**PowerShell:**
+```powershell
+.\cryptocore --algorithm aes --mode cbc --operation encrypt `
+  --key 2b7e151628aed2a6abf7158809cf4f3c `
+  --input document.pdf `
+  --output document.pdf.enc
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input document.pdf --output document.pdf.enc
+```
+
 ### Зашифровать в потоковом режиме (без padding):
+
+**Bash/Linux:**
 ```bash
 cryptocore --algorithm aes --mode ctr --operation encrypt \
   --key 2b7e151628aed2a6abf7158809cf4f3c \
@@ -291,7 +425,20 @@ cryptocore --algorithm aes --mode ctr --operation encrypt \
   --output video.mp4.enc
 ```
 
+**PowerShell:**
+```powershell
+.\cryptocore --algorithm aes --mode ctr --operation encrypt `
+  --key 2b7e151628aed2a6abf7158809cf4f3c `
+  --input video.mp4 `
+  --output video.mp4.enc
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode ctr --operation encrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input video.mp4 --output video.mp4.enc
+```
+
 ### Расшифровать с автоматическим именем выходного файла:
+
+**Bash/Linux:**
 ```bash
 cryptocore --algorithm aes --mode cbc --operation decrypt \
   --key 2b7e151628aed2a6abf7158809cf4f3c \
@@ -299,7 +446,20 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 # Создаст: document.pdf.enc.dec
 ```
 
+**PowerShell:**
+```powershell
+.\cryptocore --algorithm aes --mode cbc --operation decrypt `
+  --key 2b7e151628aed2a6abf7158809cf4f3c `
+  --input document.pdf.enc
+# Создаст: document.pdf.enc.dec
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input document.pdf.enc
+```
+
 ### Работа с бинарными данными:
+
+**Bash/Linux:**
 ```bash
 # Шифрование бинарного файла
 cryptocore --algorithm aes --mode cfb --operation encrypt \
@@ -311,6 +471,24 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
   --key 000102030405060708090a0b0c0d0e0f \
   --iv 1234567890abcdef1234567890abcdef \
   --input database.enc --output database.dec
+```
+
+**PowerShell:**
+```powershell
+# Шифрование бинарного файла
+.\cryptocore --algorithm aes --mode cfb --operation encrypt `
+  --key 000102030405060708090a0b0c0d0e0f `
+  --input database.bin --output database.enc
+
+# Дешифрование с указанием IV
+.\cryptocore --algorithm aes --mode cfb --operation decrypt `
+  --key 000102030405060708090a0b0c0d0e0f `
+  --iv 1234567890abcdef1234567890abcdef `
+  --input database.enc --output database.dec
+
+# Или в одну строку:
+.\cryptocore --algorithm aes --mode cfb --operation encrypt --key 000102030405060708090a0b0c0d0e0f --input database.bin --output database.enc
+.\cryptocore --algorithm aes --mode cfb --operation decrypt --key 000102030405060708090a0b0c0d0e0f --iv 1234567890abcdef1234567890abcdef --input database.enc --output database.dec
 ```
 
 ## Обработка ошибок
@@ -356,8 +534,9 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
 1. **Проверьте сообщения об ошибках** - они содержат детальную информацию
 2. **Убедитесь что ваш ключ** состоит из 32 шестнадцатеричных символов
 3. **Для дешифрования в режимах с IV**:
-    - Либо не указывайте `--iv` (IV будет прочитан из файла)
-    - Либо укажите правильный IV через `--iv` (32 hex символа)
+   - Либо не указывайте `--iv` (IV будет прочитан из файла)
+   - Либо укажите правильный IV через `--iv` (32 hex символа)
 4. **Для шифрования в режимах с IV** - не указывайте `--iv` (генерируется автоматически)
 5. **Убедитесь что входной файл** существует и доступен для чтения
 6. **Проверьте доступное место на диске** для выходных файлов
+7. **В PowerShell используйте `.\` перед cryptocore** - это требование безопасности PowerShell для запуска локальных исполняемых файлов

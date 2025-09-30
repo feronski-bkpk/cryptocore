@@ -30,17 +30,25 @@ print_section() {
     echo -e "${CYAN}================================================${NC}"
 }
 
+# Get the script directory and project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo -e "${CYAN}Script directory: $SCRIPT_DIR${NC}"
+echo -e "${CYAN}Project root: $PROJECT_ROOT${NC}"
+
 # Step 1: Build project
 print_section "Building Project"
+cd "$PROJECT_ROOT"
 cargo build --release
 print_status $? "Build completed"
 
 # Define the path to the executable
-CRYPTOCORE_BIN="./target/release/cryptocore"
+CRYPTOCORE_BIN="$PROJECT_ROOT/target/release/cryptocore"
 if [ ! -f "$CRYPTOCORE_BIN" ]; then
     echo -e "${YELLOW}Release build not found, trying debug build...${NC}"
     cargo build
-    CRYPTOCORE_BIN="./target/debug/cryptocore"
+    CRYPTOCORE_BIN="$PROJECT_ROOT/target/debug/cryptocore"
     if [ ! -f "$CRYPTOCORE_BIN" ]; then
         echo -e "${RED}Executable not found at $CRYPTOCORE_BIN${NC}"
         exit 1
@@ -48,6 +56,9 @@ if [ ! -f "$CRYPTOCORE_BIN" ]; then
 fi
 
 echo -e "${GREEN}Using executable: $CRYPTOCORE_BIN${NC}"
+
+# Change to script directory for test files
+cd "$SCRIPT_DIR"
 
 # Step 2: Basic functionality tests
 print_section "Basic Functionality Tests"
@@ -73,23 +84,24 @@ declare -A testFiles=(
 )
 
 for filename in "${!testFiles[@]}"; do
-    echo -e "${testFiles[$filename]}" > "$filename"
+    file_path="$SCRIPT_DIR/$filename"
+    echo -e "${testFiles[$filename]}" > "$file_path"
     echo -e "${GREEN}Created $filename${NC}"
 done
 
 # Create various binary test files
-echo -n -e "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f" > binary_16.bin
-echo -n -e "Binary\x00data\x00with\x00nulls\x00and\x00special\x00chars\xff\xfe\xfd" > binary_with_nulls.bin
+echo -n -e "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f" > "$SCRIPT_DIR/binary_16.bin"
+echo -n -e "Binary\x00data\x00with\x00nulls\x00and\x00special\x00chars\xff\xfe\xfd" > "$SCRIPT_DIR/binary_with_nulls.bin"
 
 # Create random 1KB file using different methods
 if command -v dd &> /dev/null; then
-    dd if=/dev/urandom of=random_1k.bin bs=1024 count=1 2>/dev/null
+    dd if=/dev/urandom of="$SCRIPT_DIR/random_1k.bin" bs=1024 count=1 2>/dev/null
 elif command -v head &> /dev/null; then
-    head -c 1024 /dev/urandom > random_1k.bin
+    head -c 1024 /dev/urandom > "$SCRIPT_DIR/random_1k.bin"
 else
     # Fallback: create predictable "random" data
     for i in {0..1023}; do
-        printf "\x$(printf %02x $((i % 256)))" >> random_1k.bin
+        printf "\x$(printf %02x $((i % 256)))" >> "$SCRIPT_DIR/random_1k.bin"
     done
 fi
 
@@ -112,11 +124,12 @@ for mode in "${modes[@]}"; do
     for filename in "${!testFiles[@]}"; do
         echo -n "  Testing $filename..."
 
-        encrypted_file="$filename.$mode.enc"
-        decrypted_file="$filename.$mode.dec"
+        file_path="$SCRIPT_DIR/$filename"
+        encrypted_file="$SCRIPT_DIR/$filename.$mode.enc"
+        decrypted_file="$SCRIPT_DIR/$filename.$mode.dec"
 
         # Encrypt
-        if ! $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$filename" --output "$encrypted_file"; then
+        if ! $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$file_path" --output "$encrypted_file"; then
             echo -e "${RED} Encryption failed${NC}"
             test_results+=("FAILED: $filename.$mode - Encryption failed")
             all_tests_passed=false
@@ -151,7 +164,7 @@ for mode in "${modes[@]}"; do
         fi
 
         # Compare
-        if cmp -s "$filename" "$decrypted_file"; then
+        if cmp -s "$file_path" "$decrypted_file"; then
             echo -e "${GREEN} Success${NC}"
             test_results+=("PASSED: $filename.$mode - Round-trip successful")
         else
@@ -168,12 +181,13 @@ for mode in "${modes[@]}"; do
     for binary_file in binary_16.bin binary_with_nulls.bin random_1k.bin; do
         echo -n "  Testing $binary_file..."
 
-        encrypted_file="$binary_file.$mode.enc"
-        decrypted_file="$binary_file.$mode.dec"
+        binary_path="$SCRIPT_DIR/$binary_file"
+        encrypted_file="$SCRIPT_DIR/$binary_file.$mode.enc"
+        decrypted_file="$SCRIPT_DIR/$binary_file.$mode.dec"
 
-        if $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$binary_file" --output "$encrypted_file" && \
+        if $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$binary_path" --output "$encrypted_file" && \
            $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$encrypted_file" --output "$decrypted_file" && \
-           cmp -s "$binary_file" "$decrypted_file"; then
+           cmp -s "$binary_path" "$decrypted_file"; then
             echo -e "${GREEN} Success${NC}"
             test_results+=("PASSED: $binary_file.$mode - Round-trip successful")
         else
@@ -191,31 +205,38 @@ print_section "Testing IV Handling"
 
 # Test IV provided for decryption
 print_step "Testing decryption with provided IV"
-echo "IV test data" > iv_test.txt
-if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input iv_test.txt --output iv_encrypted.bin; then
+iv_test_file="$SCRIPT_DIR/iv_test.txt"
+echo "IV test data" > "$iv_test_file"
+iv_encrypted_file="$SCRIPT_DIR/iv_encrypted.bin"
+
+if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input "$iv_test_file" --output "$iv_encrypted_file"; then
     # Extract IV from encrypted file
+    extracted_iv_file="$SCRIPT_DIR/extracted_iv.bin"
+    ciphertext_only_file="$SCRIPT_DIR/ciphertext_only.bin"
+
     if command -v dd &> /dev/null; then
-        dd if=iv_encrypted.bin of=extracted_iv.bin bs=16 count=1 2>/dev/null
-        dd if=iv_encrypted.bin of=ciphertext_only.bin bs=16 skip=1 2>/dev/null
+        dd if="$iv_encrypted_file" of="$extracted_iv_file" bs=16 count=1 2>/dev/null
+        dd if="$iv_encrypted_file" of="$ciphertext_only_file" bs=16 skip=1 2>/dev/null
     else
         # Alternative method using head/tail
-        head -c 16 iv_encrypted.bin > extracted_iv.bin
-        tail -c +17 iv_encrypted.bin > ciphertext_only.bin
+        head -c 16 "$iv_encrypted_file" > "$extracted_iv_file"
+        tail -c +17 "$iv_encrypted_file" > "$ciphertext_only_file"
     fi
 
     # Convert IV to hex for CLI
     if command -v xxd &> /dev/null; then
-        iv_hex=$(xxd -p extracted_iv.bin | tr -d '\n')
+        iv_hex=$(xxd -p "$extracted_iv_file" | tr -d '\n')
     elif command -v hexdump &> /dev/null; then
-        iv_hex=$(hexdump -ve '1/1 "%.2x"' extracted_iv.bin)
+        iv_hex=$(hexdump -ve '1/1 "%.2x"' "$extracted_iv_file")
     else
         # Simple fallback for testing
         iv_hex="000102030405060708090a0b0c0d0e0f"
     fi
 
     # Decrypt with provided IV
-    if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$iv_hex" --input ciphertext_only.bin --output iv_decrypted.txt && \
-       cmp -s iv_test.txt iv_decrypted.txt; then
+    iv_decrypted_file="$SCRIPT_DIR/iv_decrypted.txt"
+    if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$iv_hex" --input "$ciphertext_only_file" --output "$iv_decrypted_file" && \
+       cmp -s "$iv_test_file" "$iv_decrypted_file"; then
         print_status 0 "Decryption with provided IV works"
         test_results+=("PASSED: IV handling - Provided IV decryption")
     else
@@ -229,14 +250,15 @@ else
     all_tests_passed=false
 fi
 
-rm -f iv_test.txt iv_encrypted.bin extracted_iv.bin ciphertext_only.bin iv_decrypted.txt
+rm -f "$iv_test_file" "$iv_encrypted_file" "$extracted_iv_file" "$ciphertext_only_file" "$iv_decrypted_file"
 
 # Step 6: Validation and error handling tests
 print_section "Validation and Error Handling"
 
 # Test invalid key
 print_step "Testing invalid key rejection"
-if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "invalid" --input "short.txt" --output "test.enc" 2>/dev/null; then
+short_file_path="$SCRIPT_DIR/short.txt"
+if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "invalid" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     print_status 1 "Should reject invalid key"
     test_results+=("FAILED: Validation - Invalid key accepted")
     all_tests_passed=false
@@ -247,7 +269,7 @@ fi
 
 # Test wrong key length
 print_step "Testing wrong key length"
-if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "001122" --input "short.txt" --output "test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "001122" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     print_status 1 "Should reject wrong key length"
     test_results+=("FAILED: Validation - Wrong key length accepted")
     all_tests_passed=false
@@ -258,7 +280,7 @@ fi
 
 # Test nonexistent file
 print_step "Testing nonexistent file rejection"
-if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "nonexistent_file_12345.txt" --output "test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "$SCRIPT_DIR/nonexistent_file_12345.txt" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     print_status 1 "Should reject nonexistent file"
     test_results+=("FAILED: Validation - Nonexistent file accepted")
     all_tests_passed=false
@@ -269,7 +291,7 @@ fi
 
 # Test IV provided during encryption (should fail)
 print_step "Testing IV rejection during encryption"
-if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --iv "000102030405060708090A0B0C0D0E0F" --input "short.txt" --output "test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --iv "000102030405060708090A0B0C0D0E0F" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     print_status 1 "Should reject IV during encryption"
     test_results+=("FAILED: Validation - IV accepted during encryption")
     all_tests_passed=false
@@ -280,8 +302,9 @@ fi
 
 # Test missing IV for decryption
 print_step "Testing missing IV detection"
-echo "test" > short_cipher.bin
-if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --input "short_cipher.bin" --output "test.dec" 2>/dev/null; then
+short_cipher_file="$SCRIPT_DIR/short_cipher.bin"
+echo "test" > "$short_cipher_file"
+if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --input "$short_cipher_file" --output "$SCRIPT_DIR/test.dec" 2>/dev/null; then
     print_status 1 "Should detect missing IV"
     test_results+=("FAILED: Validation - Missing IV not detected")
     all_tests_passed=false
@@ -289,17 +312,18 @@ else
     print_status 0 "Missing IV correctly detected"
     test_results+=("PASSED: Validation - Missing IV detected")
 fi
-rm -f short_cipher.bin
+rm -f "$short_cipher_file"
 
 # Step 7: File handling tests
 print_section "File Handling Tests"
 
 # Test automatic output naming
 print_step "Testing automatic output naming"
-echo "Auto name test" > auto_test.txt
+auto_test_file="$SCRIPT_DIR/auto_test.txt"
+echo "Auto name test" > "$auto_test_file"
 
-$CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input auto_test.txt
-if [ $? -eq 0 ] && [ -f "auto_test.txt.enc" ]; then
+$CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "$auto_test_file"
+if [ $? -eq 0 ] && [ -f "$auto_test_file.enc" ]; then
     print_status 0 "Automatic encryption naming works"
     test_results+=("PASSED: File handling - Auto encryption naming")
 else
@@ -308,8 +332,8 @@ else
     all_tests_passed=false
 fi
 
-$CRYPTOCORE_BIN --algorithm aes --mode ecb --operation decrypt --key "$KEY" --input auto_test.txt.enc
-if [ $? -eq 0 ] && [ -f "auto_test.txt.enc.dec" ]; then
+$CRYPTOCORE_BIN --algorithm aes --mode ecb --operation decrypt --key "$KEY" --input "$auto_test_file.enc"
+if [ $? -eq 0 ] && [ -f "$auto_test_file.enc.dec" ]; then
     print_status 0 "Automatic decryption naming works"
     test_results+=("PASSED: File handling - Auto decryption naming")
 else
@@ -318,7 +342,7 @@ else
     all_tests_passed=false
 fi
 
-rm -f auto_test.txt auto_test.txt.enc auto_test.txt.enc.dec
+rm -f "$auto_test_file" "$auto_test_file.enc" "$auto_test_file.enc.dec"
 
 # Step 8: OpenSSL interoperability tests
 print_section "OpenSSL Interoperability Tests"
@@ -327,29 +351,36 @@ if command -v openssl &> /dev/null; then
     print_step "Testing OpenSSL interoperability"
 
     # Test 1: Encrypt with our tool, decrypt with OpenSSL
-    echo "OpenSSL interoperability test data" > openssl_test1.txt
+    openssl_test1_file="$SCRIPT_DIR/openssl_test1.txt"
+    echo "OpenSSL interoperability test data" > "$openssl_test1_file"
+
+    our_encrypted_file="$SCRIPT_DIR/our_encrypted.bin"
 
     # Encrypt with our tool
-    if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input openssl_test1.txt --output our_encrypted.bin; then
+    if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input "$openssl_test1_file" --output "$our_encrypted_file"; then
         # Extract IV and ciphertext
+        our_iv_file="$SCRIPT_DIR/our_iv.bin"
+        our_ciphertext_file="$SCRIPT_DIR/our_ciphertext.bin"
+
         if command -v dd &> /dev/null; then
-            dd if=our_encrypted.bin of=our_iv.bin bs=16 count=1 2>/dev/null
-            dd if=our_encrypted.bin of=our_ciphertext.bin bs=16 skip=1 2>/dev/null
+            dd if="$our_encrypted_file" of="$our_iv_file" bs=16 count=1 2>/dev/null
+            dd if="$our_encrypted_file" of="$our_ciphertext_file" bs=16 skip=1 2>/dev/null
         else
-            head -c 16 our_encrypted.bin > our_iv.bin
-            tail -c +17 our_encrypted.bin > our_ciphertext.bin
+            head -c 16 "$our_encrypted_file" > "$our_iv_file"
+            tail -c +17 "$our_encrypted_file" > "$our_ciphertext_file"
         fi
 
         # Get IV hex
         if command -v xxd &> /dev/null; then
-            iv_hex=$(xxd -p our_iv.bin | tr -d '\n')
+            iv_hex=$(xxd -p "$our_iv_file" | tr -d '\n')
         else
-            iv_hex=$(hexdump -ve '1/1 "%.2x"' our_iv.bin)
+            iv_hex=$(hexdump -ve '1/1 "%.2x"' "$our_iv_file")
         fi
 
         # Decrypt with OpenSSL
-        if openssl enc -aes-128-cbc -d -K "$KEY" -iv "$iv_hex" -in our_ciphertext.bin -out openssl_decrypted1.txt 2>/dev/null; then
-            if cmp -s openssl_test1.txt openssl_decrypted1.txt; then
+        openssl_decrypted1_file="$SCRIPT_DIR/openssl_decrypted1.txt"
+        if openssl enc -aes-128-cbc -d -K "$KEY" -iv "$iv_hex" -in "$our_ciphertext_file" -out "$openssl_decrypted1_file" 2>/dev/null; then
+            if cmp -s "$openssl_test1_file" "$openssl_decrypted1_file"; then
                 print_status 0 "OurTool -> OpenSSL: PASS"
                 test_results+=("PASSED: Interop - OurTool to OpenSSL")
             else
@@ -369,14 +400,18 @@ if command -v openssl &> /dev/null; then
     fi
 
     # Test 2: Encrypt with OpenSSL, decrypt with our tool
-    echo "OpenSSL to our tool test" > openssl_test2.txt
+    openssl_test2_file="$SCRIPT_DIR/openssl_test2.txt"
+    echo "OpenSSL to our tool test" > "$openssl_test2_file"
+
+    openssl_encrypted_file="$SCRIPT_DIR/openssl_encrypted.bin"
 
     # Encrypt with OpenSSL
     TEST_IV="000102030405060708090A0B0C0D0E0F"
-    if openssl enc -aes-128-cbc -K "$KEY" -iv "$TEST_IV" -in openssl_test2.txt -out openssl_encrypted.bin 2>/dev/null; then
+    if openssl enc -aes-128-cbc -K "$KEY" -iv "$TEST_IV" -in "$openssl_test2_file" -out "$openssl_encrypted_file" 2>/dev/null; then
         # Decrypt with our tool
-        if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$TEST_IV" --input openssl_encrypted.bin --output our_decrypted.txt; then
-            if cmp -s openssl_test2.txt our_decrypted.txt; then
+        our_decrypted_file="$SCRIPT_DIR/our_decrypted.txt"
+        if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$TEST_IV" --input "$openssl_encrypted_file" --output "$our_decrypted_file"; then
+            if cmp -s "$openssl_test2_file" "$our_decrypted_file"; then
                 print_status 0 "OpenSSL -> OurTool: PASS"
                 test_results+=("PASSED: Interop - OpenSSL to OurTool")
             else
@@ -396,7 +431,7 @@ if command -v openssl &> /dev/null; then
     fi
 
     # Cleanup
-    rm -f openssl_test1.txt openssl_test2.txt our_encrypted.bin our_iv.bin our_ciphertext.bin openssl_decrypted1.txt openssl_encrypted.bin our_decrypted.txt
+    rm -f "$openssl_test1_file" "$openssl_test2_file" "$our_encrypted_file" "$our_iv_file" "$our_ciphertext_file" "$openssl_decrypted1_file" "$openssl_encrypted_file" "$our_decrypted_file"
 else
     echo -e "${YELLOW}OpenSSL not available, skipping interoperability tests${NC}"
     test_results+=("SKIPPED: OpenSSL interoperability")
@@ -407,28 +442,32 @@ print_section "Performance and Stress Tests"
 
 print_step "Testing with larger files"
 # Create a 1MB test file if we have enough space
+large_test_file="$SCRIPT_DIR/large_test.bin"
 if command -v dd &> /dev/null; then
     # Check disk space (different methods for different systems)
     if command -v df &> /dev/null; then
-        available_space=$(df . | awk 'NR==2 {print $4}')
+        available_space=$(df "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
         if [ "$available_space" -gt 5000000 ]; then
-            dd if=/dev/urandom of=large_test.bin bs=1M count=1 2>/dev/null
+            dd if=/dev/urandom of="$large_test_file" bs=1M count=1 2>/dev/null
         else
             available_space=0
         fi
     else
         # If we can't check space, try anyway but clean up on failure
-        dd if=/dev/urandom of=large_test.bin bs=1M count=1 2>/dev/null || rm -f large_test.bin
+        dd if=/dev/urandom of="$large_test_file" bs=1M count=1 2>/dev/null || rm -f "$large_test_file"
     fi
 fi
 
-if [ -f "large_test.bin" ]; then
+if [ -f "$large_test_file" ]; then
     for mode in "ecb" "cbc"; do
         echo -n "  Testing 1MB file with $mode..."
 
-        if $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input large_test.bin --output large_encrypted.bin && \
-           $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input large_encrypted.bin --output large_decrypted.bin && \
-           cmp -s large_test.bin large_decrypted.bin; then
+        large_encrypted_file="$SCRIPT_DIR/large_encrypted.bin"
+        large_decrypted_file="$SCRIPT_DIR/large_decrypted.bin"
+
+        if $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$large_test_file" --output "$large_encrypted_file" && \
+           $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$large_encrypted_file" --output "$large_decrypted_file" && \
+           cmp -s "$large_test_file" "$large_decrypted_file"; then
             echo -e "${GREEN} Success${NC}"
             test_results+=("PASSED: Performance - 1MB file with $mode")
         else
@@ -437,10 +476,10 @@ if [ -f "large_test.bin" ]; then
             all_tests_passed=false
         fi
 
-        rm -f large_encrypted.bin large_decrypted.bin
+        rm -f "$large_encrypted_file" "$large_decrypted_file"
     done
 
-    rm -f large_test.bin
+    rm -f "$large_test_file"
 else
     echo -e "${YELLOW}  Skipping large file tests (insufficient resources)${NC}"
     test_results+=("SKIPPED: Performance - Large file tests")
@@ -450,9 +489,10 @@ fi
 print_section "Cleaning Up"
 
 for filename in "${!testFiles[@]}"; do
-    rm -f "$filename"
+    file_path="$SCRIPT_DIR/$filename"
+    rm -f "$file_path"
 done
-rm -f binary_16.bin binary_with_nulls.bin random_1k.bin
+rm -f "$SCRIPT_DIR/binary_16.bin" "$SCRIPT_DIR/binary_with_nulls.bin" "$SCRIPT_DIR/random_1k.bin"
 
 # Step 11: Results summary
 print_section "Test Results Summary"

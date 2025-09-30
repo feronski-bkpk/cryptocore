@@ -15,8 +15,16 @@ function Write-Status {
     else { Write-Host "FAILED: $Message" -ForegroundColor Red }
 }
 
+# Get the script directory and project root
+$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$PROJECT_ROOT = if ($SCRIPT_DIR -like "*\scripts") { Split-Path -Parent $SCRIPT_DIR } else { $SCRIPT_DIR }
+
+Write-Host "Script directory: $SCRIPT_DIR" -ForegroundColor Gray
+Write-Host "Project root: $PROJECT_ROOT" -ForegroundColor Gray
+
 # Step 1: Build project
 Write-Section "Building Project"
+Set-Location $PROJECT_ROOT
 cargo build --release
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
@@ -25,11 +33,11 @@ if ($LASTEXITCODE -ne 0) {
 Write-Status $true "Build completed"
 
 # Define the path to the executable
-$CRYPTOCORE_EXE = "..\target\release\cryptocore.exe"
+$CRYPTOCORE_EXE = Join-Path $PROJECT_ROOT "target\release\cryptocore.exe"
 if (-not (Test-Path $CRYPTOCORE_EXE)) {
     Write-Host "Executable not found at $CRYPTOCORE_EXE" -ForegroundColor Yellow
     Write-Host "Trying debug build..." -ForegroundColor Yellow
-    $CRYPTOCORE_EXE = "..\target\debug\cryptocore.exe"
+    $CRYPTOCORE_EXE = Join-Path $PROJECT_ROOT "target\debug\cryptocore.exe"
     cargo build
     if (-not (Test-Path $CRYPTOCORE_EXE)) {
         Write-Host "Executable not found at $CRYPTOCORE_EXE" -ForegroundColor Red
@@ -38,6 +46,9 @@ if (-not (Test-Path $CRYPTOCORE_EXE)) {
 }
 
 Write-Host "Using executable: $CRYPTOCORE_EXE" -ForegroundColor Green
+
+# Change to script directory for test files
+Set-Location $SCRIPT_DIR
 
 # Step 2: Basic functionality tests
 Write-Section "Basic Functionality Tests"
@@ -63,21 +74,22 @@ $testFiles = @{
 }
 
 foreach ($file in $testFiles.GetEnumerator()) {
-    $file.Value | Out-File -FilePath $file.Key -Encoding utf8
+    $filePath = Join-Path $SCRIPT_DIR $file.Key
+    $file.Value | Out-File -FilePath $filePath -Encoding utf8
     Write-Host "Created $($file.Key)" -ForegroundColor Green
 }
 
 # Create binary test files
-[byte[]]$binaryData1 = @(0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f)
-[System.IO.File]::WriteAllBytes("binary_16.bin", $binaryData1)
+$binaryData1 = @(0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f)
+[System.IO.File]::WriteAllBytes((Join-Path $SCRIPT_DIR "binary_16.bin"), $binaryData1)
 
-[byte[]]$binaryData2 = @(0x42,0x69,0x6E,0x61,0x72,0x79,0x00,0x64,0x61,0x74,0x61,0x00,0x77,0x69,0x74,0x68,0x00,0x6E,0x75,0x6C,0x6C,0x73,0x00,0x61,0x6E,0x64,0x00,0x73,0x70,0x65,0x63,0x69,0x61,0x6C,0x00,0x63,0x68,0x61,0x72,0x73,0xFF,0xFE,0xFD)
-[System.IO.File]::WriteAllBytes("binary_with_nulls.bin", $binaryData2)
+$binaryData2 = @(0x42,0x69,0x6E,0x61,0x72,0x79,0x00,0x64,0x61,0x74,0x61,0x00,0x77,0x69,0x74,0x68,0x00,0x6E,0x75,0x6C,0x6C,0x73,0x00,0x61,0x6E,0x64,0x00,0x73,0x70,0x65,0x63,0x69,0x61,0x6C,0x00,0x63,0x68,0x61,0x72,0x73,0xFF,0xFE,0xFD)
+[System.IO.File]::WriteAllBytes((Join-Path $SCRIPT_DIR "binary_with_nulls.bin"), $binaryData2)
 
 # Create random 1KB file
 $randomBytes = New-Object byte[] 1024
 (New-Object Random).NextBytes($randomBytes)
-[System.IO.File]::WriteAllBytes("random_1k.bin", $randomBytes)
+[System.IO.File]::WriteAllBytes((Join-Path $SCRIPT_DIR "random_1k.bin"), $randomBytes)
 
 Write-Host "Created binary test files" -ForegroundColor Green
 
@@ -97,10 +109,11 @@ foreach ($mode in $modes) {
     # Test with each file type
     foreach ($file in $testFiles.GetEnumerator()) {
         $filename = $file.Key
+        $filePath = Join-Path $SCRIPT_DIR $filename
         Write-Host "  Testing $filename..." -NoNewline
 
-        $encryptedFile = "$filename.$mode.enc"
-        $decryptedFile = "$filename.$mode.dec"
+        $encryptedFile = Join-Path $SCRIPT_DIR "$filename.$mode.enc"
+        $decryptedFile = Join-Path $SCRIPT_DIR "$filename.$mode.dec"
 
         # Build encryption command
         $encryptArgs = @(
@@ -108,7 +121,7 @@ foreach ($mode in $modes) {
             "--mode", $mode,
             "--operation", "encrypt",
             "--key", $KEY,
-            "--input", $filename,
+            "--input", $filePath,
             "--output", $encryptedFile
         )
 
@@ -161,7 +174,7 @@ foreach ($mode in $modes) {
 
         # Compare files as bytes
         try {
-            $originalBytes = [System.IO.File]::ReadAllBytes($filename)
+            $originalBytes = [System.IO.File]::ReadAllBytes($filePath)
             $decryptedBytes = [System.IO.File]::ReadAllBytes($decryptedFile)
             $filesMatch = ($originalBytes.Length -eq $decryptedBytes.Length)
             if ($filesMatch) {
@@ -196,15 +209,16 @@ foreach ($mode in $modes) {
     foreach ($binaryFile in $binaryFiles) {
         Write-Host "  Testing $binaryFile..." -NoNewline
 
-        $encryptedFile = "$binaryFile.$mode.enc"
-        $decryptedFile = "$binaryFile.$mode.dec"
+        $binaryFilePath = Join-Path $SCRIPT_DIR $binaryFile
+        $encryptedFile = Join-Path $SCRIPT_DIR "$binaryFile.$mode.enc"
+        $decryptedFile = Join-Path $SCRIPT_DIR "$binaryFile.$mode.dec"
 
         $encryptArgs = @(
             "--algorithm", "aes",
             "--mode", $mode,
             "--operation", "encrypt",
             "--key", $KEY,
-            "--input", $binaryFile,
+            "--input", $binaryFilePath,
             "--output", $encryptedFile
         )
 
@@ -234,7 +248,7 @@ foreach ($mode in $modes) {
         }
 
         try {
-            $originalBytes = [System.IO.File]::ReadAllBytes($binaryFile)
+            $originalBytes = [System.IO.File]::ReadAllBytes($binaryFilePath)
             $decryptedBytes = [System.IO.File]::ReadAllBytes($decryptedFile)
             $filesMatch = ($originalBytes.Length -eq $decryptedBytes.Length)
             if ($filesMatch) {
@@ -269,29 +283,34 @@ Write-Section "Testing IV Handling"
 
 # Test IV provided for decryption
 Write-Step "Testing decryption with provided IV"
-"IV test data" | Out-File -FilePath iv_test.txt -Encoding utf8
+$ivTestFile = Join-Path $SCRIPT_DIR "iv_test.txt"
+"IV test data" | Out-File -FilePath $ivTestFile -Encoding utf8
+
+$ivEncryptedFile = Join-Path $SCRIPT_DIR "iv_encrypted.bin"
 
 # Encrypt with auto IV
-& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --input iv_test.txt --output iv_encrypted.bin
+& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --input $ivTestFile --output $ivEncryptedFile
 
 if ($LASTEXITCODE -eq 0) {
     # Extract IV from encrypted file
-    $encryptedData = [System.IO.File]::ReadAllBytes("iv_encrypted.bin")
+    $encryptedData = [System.IO.File]::ReadAllBytes($ivEncryptedFile)
     $extractedIv = $encryptedData[0..15]
     $ciphertextOnly = $encryptedData[16..($encryptedData.Length-1)]
 
     # Save ciphertext without IV
-    [System.IO.File]::WriteAllBytes("ciphertext_only.bin", $ciphertextOnly)
+    $ciphertextFile = Join-Path $SCRIPT_DIR "ciphertext_only.bin"
+    [System.IO.File]::WriteAllBytes($ciphertextFile, $ciphertextOnly)
 
     # Convert IV to hex for CLI
     $ivHex = -join ($extractedIv | ForEach-Object { $_.ToString("X2") })
 
     # Decrypt with provided IV
-    & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $ivHex --input ciphertext_only.bin --output iv_decrypted.txt
+    $ivDecryptedFile = Join-Path $SCRIPT_DIR "iv_decrypted.txt"
+    & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $ivHex --input $ciphertextFile --output $ivDecryptedFile
 
     if ($LASTEXITCODE -eq 0) {
-        $original = Get-Content iv_test.txt -Raw
-        $decrypted = Get-Content iv_decrypted.txt -Raw
+        $original = Get-Content $ivTestFile -Raw
+        $decrypted = Get-Content $ivDecryptedFile -Raw
 
         if ($original -eq $decrypted) {
             Write-Status $true "Decryption with provided IV works"
@@ -312,14 +331,15 @@ if ($LASTEXITCODE -eq 0) {
     $allTestsPassed = $false
 }
 
-Remove-Item iv_test.txt, iv_encrypted.bin, ciphertext_only.bin, iv_decrypted.txt -ErrorAction SilentlyContinue
+Remove-Item $ivTestFile, $ivEncryptedFile, $ciphertextFile, $ivDecryptedFile -ErrorAction SilentlyContinue
 
 # Step 6: Validation and error handling tests
 Write-Section "Validation and Error Handling"
 
 # Test invalid key
 Write-Step "Testing invalid key rejection"
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "invalid" --input "short.txt" --output "test.enc" 2>$null
+$shortFilePath = Join-Path $SCRIPT_DIR "short.txt"
+& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "invalid" --input $shortFilePath --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject invalid key"
     $testResults += "FAILED: Validation - Invalid key accepted"
@@ -331,7 +351,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # Test wrong key length
 Write-Step "Testing wrong key length"
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "001122" --input "short.txt" --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "001122" --input $shortFilePath --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject wrong key length"
     $testResults += "FAILED: Validation - Wrong key length accepted"
@@ -355,7 +375,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # Test IV provided during encryption (should fail)
 Write-Step "Testing IV rejection during encryption"
-& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --iv "000102030405060708090A0B0C0D0E0F" --input "short.txt" --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --iv "000102030405060708090A0B0C0D0E0F" --input $shortFilePath --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject IV during encryption"
     $testResults += "FAILED: Validation - IV accepted during encryption"
@@ -367,8 +387,9 @@ if ($LASTEXITCODE -eq 0) {
 
 # Test missing IV for decryption
 Write-Step "Testing missing IV detection"
-"test" | Out-File -FilePath short_cipher.bin -Encoding utf8
-& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --input "short_cipher.bin" --output "test.dec" 2>$null
+$shortCipherFile = Join-Path $SCRIPT_DIR "short_cipher.bin"
+"test" | Out-File -FilePath $shortCipherFile -Encoding utf8
+& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --input $shortCipherFile --output "test.dec" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should detect missing IV"
     $testResults += "FAILED: Validation - Missing IV not detected"
@@ -377,17 +398,18 @@ if ($LASTEXITCODE -eq 0) {
     Write-Status $true "Missing IV correctly detected"
     $testResults += "PASSED: Validation - Missing IV detected"
 }
-Remove-Item short_cipher.bin -ErrorAction SilentlyContinue
+Remove-Item $shortCipherFile -ErrorAction SilentlyContinue
 
 # Step 7: File handling tests
 Write-Section "File Handling Tests"
 
 # Test automatic output naming
 Write-Step "Testing automatic output naming"
-"Auto name test" | Out-File -FilePath auto_test.txt -Encoding utf8
+$autoTestFile = Join-Path $SCRIPT_DIR "auto_test.txt"
+"Auto name test" | Out-File -FilePath $autoTestFile -Encoding utf8
 
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key $KEY --input auto_test.txt
-if ($LASTEXITCODE -eq 0 -and (Test-Path "auto_test.txt.enc")) {
+& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key $KEY --input $autoTestFile
+if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc")) {
     Write-Status $true "Automatic encryption naming works"
     $testResults += "PASSED: File handling - Auto encryption naming"
 } else {
@@ -396,8 +418,8 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path "auto_test.txt.enc")) {
     $allTestsPassed = $false
 }
 
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation decrypt --key $KEY --input auto_test.txt.enc
-if ($LASTEXITCODE -eq 0 -and (Test-Path "auto_test.txt.enc.dec")) {
+& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation decrypt --key $KEY --input "$autoTestFile.enc"
+if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc.dec")) {
     Write-Status $true "Automatic decryption naming works"
     $testResults += "PASSED: File handling - Auto decryption naming"
 } else {
@@ -406,7 +428,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path "auto_test.txt.enc.dec")) {
     $allTestsPassed = $false
 }
 
-Remove-Item auto_test.txt, auto_test.txt.enc, auto_test.txt.enc.dec -ErrorAction SilentlyContinue
+Remove-Item $autoTestFile, "$autoTestFile.enc", "$autoTestFile.enc.dec" -ErrorAction SilentlyContinue
 
 # Step 8: OpenSSL interoperability tests
 Write-Section "OpenSSL Interoperability Tests"
@@ -416,29 +438,35 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
 
     try {
         # Test 1: Encrypt with our tool, decrypt with OpenSSL
-        "OpenSSL interoperability test data" | Out-File -FilePath openssl_test1.txt -Encoding utf8
+        $opensslTest1File = Join-Path $SCRIPT_DIR "openssl_test1.txt"
+        "OpenSSL interoperability test data" | Out-File -FilePath $opensslTest1File -Encoding utf8
+
+        $ourEncryptedFile = Join-Path $SCRIPT_DIR "our_encrypted.bin"
 
         # Encrypt with our tool
-        & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --input openssl_test1.txt --output our_encrypted.bin
+        & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --input $opensslTest1File --output $ourEncryptedFile
 
         if ($LASTEXITCODE -eq 0) {
             # Extract IV and ciphertext
-            $encryptedData = [System.IO.File]::ReadAllBytes("our_encrypted.bin")
+            $encryptedData = [System.IO.File]::ReadAllBytes($ourEncryptedFile)
             $ivBytes = $encryptedData[0..15]
             $ciphertextBytes = $encryptedData[16..($encryptedData.Length-1)]
 
-            [System.IO.File]::WriteAllBytes("our_iv.bin", $ivBytes)
-            [System.IO.File]::WriteAllBytes("our_ciphertext.bin", $ciphertextBytes)
+            $ourIvFile = Join-Path $SCRIPT_DIR "our_iv.bin"
+            $ourCiphertextFile = Join-Path $SCRIPT_DIR "our_ciphertext.bin"
+            [System.IO.File]::WriteAllBytes($ourIvFile, $ivBytes)
+            [System.IO.File]::WriteAllBytes($ourCiphertextFile, $ciphertextBytes)
 
             # Convert IV to hex for OpenSSL
             $ivHex = -join ($ivBytes | ForEach-Object { $_.ToString("X2") })
 
             # Decrypt with OpenSSL
-            openssl enc -aes-128-cbc -d -K $KEY -iv $ivHex -in our_ciphertext.bin -out openssl_decrypted1.txt
+            $opensslDecrypted1File = Join-Path $SCRIPT_DIR "openssl_decrypted1.txt"
+            openssl enc -aes-128-cbc -d -K $KEY -iv $ivHex -in $ourCiphertextFile -out $opensslDecrypted1File
 
             if ($LASTEXITCODE -eq 0) {
-                $original = Get-Content openssl_test1.txt -Raw
-                $decrypted = Get-Content openssl_decrypted1.txt -Raw
+                $original = Get-Content $opensslTest1File -Raw
+                $decrypted = Get-Content $opensslDecrypted1File -Raw
 
                 if ($original -eq $decrypted) {
                     Write-Status $true "OurTool -> OpenSSL: PASS"
@@ -460,19 +488,23 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
         }
 
         # Test 2: Encrypt with OpenSSL, decrypt with our tool
-        "OpenSSL to our tool test" | Out-File -FilePath openssl_test2.txt -Encoding utf8
+        $opensslTest2File = Join-Path $SCRIPT_DIR "openssl_test2.txt"
+        "OpenSSL to our tool test" | Out-File -FilePath $opensslTest2File -Encoding utf8
+
+        $opensslEncryptedFile = Join-Path $SCRIPT_DIR "openssl_encrypted.bin"
 
         # Encrypt with OpenSSL
         $TEST_IV = "000102030405060708090A0B0C0D0E0F"
-        openssl enc -aes-128-cbc -K $KEY -iv $TEST_IV -in openssl_test2.txt -out openssl_encrypted.bin
+        openssl enc -aes-128-cbc -K $KEY -iv $TEST_IV -in $opensslTest2File -out $opensslEncryptedFile
 
         if ($LASTEXITCODE -eq 0) {
             # Decrypt with our tool
-            & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $TEST_IV --input openssl_encrypted.bin --output our_decrypted.txt
+            $ourDecryptedFile = Join-Path $SCRIPT_DIR "our_decrypted.txt"
+            & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $TEST_IV --input $opensslEncryptedFile --output $ourDecryptedFile
 
             if ($LASTEXITCODE -eq 0) {
-                $original = Get-Content openssl_test2.txt -Raw
-                $decrypted = Get-Content our_decrypted.txt -Raw
+                $original = Get-Content $opensslTest2File -Raw
+                $decrypted = Get-Content $ourDecryptedFile -Raw
 
                 if ($original -eq $decrypted) {
                     Write-Status $true "OpenSSL -> OurTool: PASS"
@@ -494,7 +526,7 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
         }
 
         # Cleanup
-        Remove-Item openssl_test1.txt, openssl_test2.txt, our_encrypted.bin, our_iv.bin, our_ciphertext.bin, openssl_decrypted1.txt, openssl_encrypted.bin, our_decrypted.txt -ErrorAction SilentlyContinue
+        Remove-Item $opensslTest1File, $opensslTest2File, $ourEncryptedFile, $ourIvFile, $ourCiphertextFile, $opensslDecrypted1File, $opensslEncryptedFile, $ourDecryptedFile -ErrorAction SilentlyContinue
 
     } catch {
         Write-Status $false "OpenSSL interoperability test error: $($_.Exception.Message)"
@@ -515,22 +547,26 @@ try {
     $freeSpace = (Get-PSDrive -Name (Get-Location).Drive.Name).Free
     if ($freeSpace -gt 10MB) {
         # Create 1MB file
+        $largeTestFile = Join-Path $SCRIPT_DIR "large_test.bin"
         $largeData = New-Object byte[] 1MB
         (New-Object Random).NextBytes($largeData)
-        [System.IO.File]::WriteAllBytes("large_test.bin", $largeData)
+        [System.IO.File]::WriteAllBytes($largeTestFile, $largeData)
 
         foreach ($mode in @("ecb", "cbc")) {
             Write-Host "  Testing 1MB file with $mode..." -NoNewline
 
-            & $CRYPTOCORE_EXE --algorithm aes --mode $mode --operation encrypt --key $KEY --input large_test.bin --output large_encrypted.bin
+            $largeEncryptedFile = Join-Path $SCRIPT_DIR "large_encrypted.bin"
+            $largeDecryptedFile = Join-Path $SCRIPT_DIR "large_decrypted.bin"
+
+            & $CRYPTOCORE_EXE --algorithm aes --mode $mode --operation encrypt --key $KEY --input $largeTestFile --output $largeEncryptedFile
             $encryptSuccess = ($LASTEXITCODE -eq 0)
 
-            & $CRYPTOCORE_EXE --algorithm aes --mode $mode --operation decrypt --key $KEY --input large_encrypted.bin --output large_decrypted.bin
+            & $CRYPTOCORE_EXE --algorithm aes --mode $mode --operation decrypt --key $KEY --input $largeEncryptedFile --output $largeDecryptedFile
             $decryptSuccess = ($LASTEXITCODE -eq 0)
 
             if ($encryptSuccess -and $decryptSuccess) {
-                $originalBytes = [System.IO.File]::ReadAllBytes("large_test.bin")
-                $decryptedBytes = [System.IO.File]::ReadAllBytes("large_decrypted.bin")
+                $originalBytes = [System.IO.File]::ReadAllBytes($largeTestFile)
+                $decryptedBytes = [System.IO.File]::ReadAllBytes($largeDecryptedFile)
                 $filesMatch = ($originalBytes.Length -eq $decryptedBytes.Length)
 
                 if ($filesMatch) {
@@ -570,10 +606,10 @@ try {
                 $allTestsPassed = $false
             }
 
-            Remove-Item large_encrypted.bin, large_decrypted.bin -ErrorAction SilentlyContinue
+            Remove-Item $largeEncryptedFile, $largeDecryptedFile -ErrorAction SilentlyContinue
         }
 
-        Remove-Item large_test.bin -ErrorAction SilentlyContinue
+        Remove-Item $largeTestFile -ErrorAction SilentlyContinue
     } else {
         Write-Host "  Skipping large file tests (insufficient disk space)" -ForegroundColor Yellow
         $testResults += "SKIPPED: Performance - Large file tests"
@@ -587,9 +623,10 @@ try {
 Write-Section "Cleaning Up"
 
 foreach ($file in $testFiles.GetEnumerator()) {
-    Remove-Item $file.Key -ErrorAction SilentlyContinue
+    $filePath = Join-Path $SCRIPT_DIR $file.Key
+    Remove-Item $filePath -ErrorAction SilentlyContinue
 }
-Remove-Item binary_16.bin, binary_with_nulls.bin, random_1k.bin -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $SCRIPT_DIR "binary_16.bin"), (Join-Path $SCRIPT_DIR "binary_with_nulls.bin"), (Join-Path $SCRIPT_DIR "random_1k.bin") -ErrorAction SilentlyContinue
 
 # Step 11: Results summary
 Write-Section "Test Results Summary"
