@@ -93,7 +93,119 @@ $randomBytes = New-Object byte[] 1024
 
 Write-Host "Created binary test files" -ForegroundColor Green
 
-# Step 4: Test all encryption modes comprehensively
+# Step 4: CSPRNG Module Tests
+Write-Section "CSPRNG Module Tests"
+
+Write-Step "Testing CSPRNG module"
+cargo test --test csprng -- --nocapture
+Write-Status ($LASTEXITCODE -eq 0) "CSPRNG module tests"
+
+# Step 5: Automatic Key Generation Tests
+Write-Section "Automatic Key Generation Tests"
+
+Write-Step "Testing encryption without --key parameter"
+$autoKeyTestFile = Join-Path $SCRIPT_DIR "auto_key_test.txt"
+"Testing automatic key generation" | Out-File -FilePath $autoKeyTestFile -Encoding utf8
+
+# Capture both stdout and stderr
+$autoKeyProcess = Start-Process -FilePath $CRYPTOCORE_EXE -ArgumentList @(
+    "--algorithm", "aes",
+    "--mode", "cbc",
+    "--operation", "encrypt",
+    "--input", $autoKeyTestFile,
+    "--output", "$autoKeyTestFile.enc"
+) -PassThru -Wait -NoNewWindow
+$autoKeySuccess = ($autoKeyProcess.ExitCode -eq 0)
+
+# Get the output by running the command again and capturing output
+$autoKeyOutput = & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --input $autoKeyTestFile --output "$autoKeyTestFile.enc" 2>&1
+$autoKeySuccess = ($LASTEXITCODE -eq 0)
+
+if ($autoKeySuccess) {
+    # Convert output array to string for matching
+    $outputText = $autoKeyOutput -join "`n"
+
+    # Check if key was generated and printed
+    if ($outputText -match "Generated random key: ([0-9a-f]{32})") {
+        $generatedKey = $matches[1]
+        Write-Host "Generated key: $generatedKey" -ForegroundColor Green
+
+        # Test decryption with generated key
+        & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $generatedKey --input "$autoKeyTestFile.enc" --output "$autoKeyTestFile.dec"
+        $decryptSuccess = ($LASTEXITCODE -eq 0)
+
+        if ($decryptSuccess) {
+            $original = Get-Content $autoKeyTestFile -Raw
+            $decrypted = Get-Content "$autoKeyTestFile.dec" -Raw
+
+            if ($original -eq $decrypted) {
+                Write-Status $true "Automatic key generation and usage"
+                $testResults += "PASSED: Auto Key - Generation and usage"
+            } else {
+                Write-Status $false "Automatic key generation (content mismatch)"
+                $testResults += "FAILED: Auto Key - Content mismatch"
+                $allTestsPassed = $false
+            }
+        } else {
+            Write-Status $false "Automatic key generation (decryption failed)"
+            $testResults += "FAILED: Auto Key - Decryption failed"
+            $allTestsPassed = $false
+        }
+    } else {
+        Write-Status $false "Automatic key generation (no key output)"
+        Write-Host "Output was: $outputText" -ForegroundColor Yellow
+        $testResults += "FAILED: Auto Key - No key output"
+        $allTestsPassed = $false
+    }
+} else {
+    Write-Status $false "Automatic key generation (encryption failed)"
+    Write-Host "Output was: $autoKeyOutput" -ForegroundColor Yellow
+    $testResults += "FAILED: Auto Key - Encryption failed"
+    $allTestsPassed = $false
+}
+
+Remove-Item $autoKeyTestFile, "$autoKeyTestFile.enc", "$autoKeyTestFile.dec" -ErrorAction SilentlyContinue
+
+# Step 6: Weak Key Detection Tests
+Write-Section "Weak Key Detection Tests"
+
+Write-Step "Testing weak key detection"
+$weakKeyTestFile = Join-Path $SCRIPT_DIR "weak_key_test.txt"
+"Weak key test" | Out-File -FilePath $weakKeyTestFile -Encoding utf8
+
+# Test all zeros key (should show warning but work)
+$weakKeyOutput = & $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "00000000000000000000000000000000" --input $weakKeyTestFile --output "$weakKeyTestFile.enc" 2>&1
+$weakKeyOutputText = $weakKeyOutput -join "`n"
+$weakKeyWarning = $weakKeyOutputText -match "WARNING.*weak"
+$weakKeySuccess = ($LASTEXITCODE -eq 0)
+
+if ($weakKeyWarning -and $weakKeySuccess) {
+    Write-Status $true "Weak key detection with all zeros"
+    $testResults += "PASSED: Weak Key - All zeros detection"
+} else {
+    Write-Status $false "Weak key detection failed"
+    $testResults += "FAILED: Weak Key - All zeros detection"
+    $allTestsPassed = $false
+}
+
+# Test sequential key (should show warning but work)
+$sequentialKeyOutput = & $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "000102030405060708090a0b0c0d0e0f" --input $weakKeyTestFile --output "$weakKeyTestFile.enc2" 2>&1
+$sequentialKeyOutputText = $sequentialKeyOutput -join "`n"
+$sequentialKeyWarning = $sequentialKeyOutputText -match "WARNING.*weak"
+$sequentialKeySuccess = ($LASTEXITCODE -eq 0)
+
+if ($sequentialKeyWarning -and $sequentialKeySuccess) {
+    Write-Status $true "Weak key detection with sequential bytes"
+    $testResults += "PASSED: Weak Key - Sequential bytes detection"
+} else {
+    Write-Status $false "Sequential key detection failed"
+    $testResults += "FAILED: Weak Key - Sequential bytes detection"
+    $allTestsPassed = $false
+}
+
+Remove-Item $weakKeyTestFile, "$weakKeyTestFile.enc", "$weakKeyTestFile.enc2" -ErrorAction SilentlyContinue
+
+# Step 7: Test all encryption modes comprehensively
 Write-Section "Testing All Encryption Modes"
 
 $KEY = "00112233445566778899aabbccddeeff"
@@ -278,7 +390,7 @@ foreach ($mode in $modes) {
     }
 }
 
-# Step 5: Advanced IV handling tests
+# Step 8: Advanced IV handling tests
 Write-Section "Testing IV Handling"
 
 # Test IV provided for decryption
@@ -333,7 +445,7 @@ if ($LASTEXITCODE -eq 0) {
 
 Remove-Item $ivTestFile, $ivEncryptedFile, $ciphertextFile, $ivDecryptedFile -ErrorAction SilentlyContinue
 
-# Step 6: Validation and error handling tests
+# Step 9: Validation and error handling tests
 Write-Section "Validation and Error Handling"
 
 # Test invalid key
@@ -400,7 +512,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 Remove-Item $shortCipherFile -ErrorAction SilentlyContinue
 
-# Step 7: File handling tests
+# Step 10: File handling tests
 Write-Section "File Handling Tests"
 
 # Test automatic output naming
@@ -430,7 +542,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc.dec")) {
 
 Remove-Item $autoTestFile, "$autoTestFile.enc", "$autoTestFile.enc.dec" -ErrorAction SilentlyContinue
 
-# Step 8: OpenSSL interoperability tests
+# Step 11: OpenSSL interoperability tests
 Write-Section "OpenSSL Interoperability Tests"
 
 if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
@@ -538,7 +650,7 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
     $testResults += "SKIPPED: OpenSSL interoperability"
 }
 
-# Step 9: Performance and stress tests
+# Step 12: Performance and stress tests
 Write-Section "Performance and Stress Tests"
 
 Write-Step "Testing with larger files"
@@ -619,7 +731,7 @@ try {
     $testResults += "SKIPPED: Performance - Large file tests"
 }
 
-# Step 10: Cleanup
+# Step 13: Cleanup
 Write-Section "Cleaning Up"
 
 foreach ($file in $testFiles.GetEnumerator()) {
@@ -628,7 +740,7 @@ foreach ($file in $testFiles.GetEnumerator()) {
 }
 Remove-Item (Join-Path $SCRIPT_DIR "binary_16.bin"), (Join-Path $SCRIPT_DIR "binary_with_nulls.bin"), (Join-Path $SCRIPT_DIR "random_1k.bin") -ErrorAction SilentlyContinue
 
-# Step 11: Results summary
+# Step 14: Results summary
 Write-Section "Test Results Summary"
 
 $passedCount = 0
@@ -660,7 +772,8 @@ Write-Host ""
 
 if ($allTestsPassed) {
     Write-Host "ALL TESTS PASSED! CryptoCore is fully functional!" -ForegroundColor Green
-    Write-Host "All requirements from M2 document are satisfied" -ForegroundColor Green
+    Write-Host "All requirements from M3 document are satisfied" -ForegroundColor Green
+    Write-Host "CSPRNG module working with automatic key generation" -ForegroundColor Green
     Write-Host "All 5 encryption modes working: ECB, CBC, CFB, OFB, CTR" -ForegroundColor Green
     Write-Host "Comprehensive testing completed successfully" -ForegroundColor Green
     Write-Host "File handling, validation, and interoperability verified" -ForegroundColor Green

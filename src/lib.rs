@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod crypto;
 pub mod file;
+pub mod csprng;
 
 pub use cli::{Cli, Mode, Operation};
 pub use crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb};

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 use anyhow::{Result, anyhow};
-use rand::RngCore;
+// Убрали использование Csprng, так как generate_iv больше не используется здесь
 
 const IV_SIZE: usize = 16;
 
@@ -23,11 +23,7 @@ pub fn write_file(path: &Path, data: &[u8]) -> Result<()> {
     })
 }
 
-pub fn generate_iv() -> [u8; IV_SIZE] {
-    let mut iv = [0u8; IV_SIZE];
-    rand::thread_rng().fill_bytes(&mut iv);
-    iv
-}
+// Убрали функцию generate_iv, так как она теперь в csprng модуле
 
 pub fn extract_iv_from_file(data: &[u8]) -> Result<([u8; IV_SIZE], &[u8])> {
     if data.len() < IV_SIZE {
@@ -68,16 +64,6 @@ mod tests {
     fn test_read_nonexistent_file() {
         let result = read_file(Path::new("/nonexistent/file_that_does_not_exist_12345.txt"));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_generate_iv() {
-        let iv1 = generate_iv();
-        let iv2 = generate_iv();
-
-        assert_eq!(iv1.len(), IV_SIZE);
-        assert_eq!(iv2.len(), IV_SIZE);
-        assert_ne!(iv1, iv2);
     }
 
     #[test]

@@ -1,12 +1,12 @@
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]  // Добавь PartialEq здесь
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 pub enum Algorithm {
     Aes,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]  // Добавь PartialEq здесь
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 pub enum Mode {
     Ecb,
     Cbc,
@@ -15,7 +15,7 @@ pub enum Mode {
     Ctr,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]  // Добавь PartialEq здесь
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 pub enum Operation {
     Encrypt,
     Decrypt,
@@ -24,19 +24,27 @@ pub enum Operation {
 #[derive(Parser, Debug)]
 #[command(
     name = "cryptocore",
-    version = "0.2.0",
+    version = "0.3.0",
     about = "CryptoCore - AES-128 encryption/decryption tool with multiple modes",
     long_about = r#"
 CryptoCore: A command-line tool for AES-128 encryption and decryption with multiple modes.
 
 Supported modes: ECB, CBC, CFB, OFB, CTR
 
+Key Generation:
+  - For encryption, --key is now optional
+  - If --key is omitted, a secure random 128-bit key will be generated
+  - Generated keys are printed to stdout in hexadecimal format
+
 Examples:
-  Encryption (generates random IV):
+  Encryption with automatic key generation:
+    cryptocore --algorithm aes --mode cbc --operation encrypt --input plain.txt --output cipher.bin
+
+  Encryption with provided key:
     cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input plain.txt --output cipher.bin
 
-  Decryption (IV must be provided):
-    cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv AABBCCDDEEFF00112233445566778899 --input cipher.bin --output decrypted.txt
+  Decryption (key always required):
+    cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input cipher.bin --output decrypted.txt
 "#
 )]
 pub struct Cli {
@@ -66,10 +74,10 @@ pub struct Cli {
 
     #[arg(
         long,
-        help = "Encryption key as hexadecimal string",
-        long_help = "16-byte key provided as 32-character hexadecimal string. Prefix with '@' is optional."
+        help = "Encryption key as hexadecimal string (optional for encryption)",
+        long_help = "16-byte key provided as 32-character hexadecimal string. Optional for encryption (will generate random key). Required for decryption. Prefix with '@' is optional."
     )]
-    pub key: String,
+    pub key: Option<String>,
 
     #[arg(
         long,
@@ -95,15 +103,26 @@ pub struct Cli {
 
 impl Cli {
     pub fn validate(&self) -> Result<(), String> {
-        let key_str = self.key.trim_start_matches('@');
-        if key_str.len() != 32 {
-            return Err(format!("Key must be 32 hex characters, got {}", key_str.len()));
+        // Validate key (if provided)
+        if let Some(key) = &self.key {
+            let key_str = key.trim_start_matches('@');
+            if key_str.len() != 32 {
+                return Err(format!("Key must be 32 hex characters, got {}", key_str.len()));
+            }
+
+            if hex::decode(key_str).is_err() {
+                return Err("Key must be a valid hexadecimal string".to_string());
+            }
+
+            // Check for weak keys and warn (but don't fail)
+            if Self::is_weak_key(key_str) {
+                eprintln!("[WARNING] The provided key appears to be weak. Consider using a stronger key.");
+            }
+        } else if self.operation == Operation::Decrypt {
+            return Err("Key is required for decryption".to_string());
         }
 
-        if hex::decode(key_str).is_err() {
-            return Err("Key must be a valid hexadecimal string".to_string());
-        }
-        
+        // Validate IV (if provided)
         if let Some(iv) = &self.iv {
             let iv_str = iv.trim_start_matches('@');
             if iv_str.len() != 32 {
@@ -113,12 +132,13 @@ impl Cli {
             if hex::decode(iv_str).is_err() {
                 return Err("IV must be a valid hexadecimal string".to_string());
             }
-            
+
             if self.operation == Operation::Encrypt {
                 return Err("IV should not be provided for encryption".to_string());
             }
         }
 
+        // Validate input file exists
         if !self.input.exists() {
             return Err(format!("Input file does not exist: {}", self.input.display()));
         }
@@ -134,5 +154,46 @@ impl Cli {
             };
             PathBuf::from(default_name)
         })
+    }
+
+    /// Checks if a key is weak (all zeros, sequential bytes, etc.)
+    pub fn is_weak_key(key_hex: &str) -> bool {
+        let key_str = key_hex.trim_start_matches('@');
+        if let Ok(key_bytes) = hex::decode(key_str) {
+            // Check for all zeros
+            if key_bytes.iter().all(|&b| b == 0) {
+                return true;
+            }
+
+            // Check for all same bytes
+            if key_bytes.windows(2).all(|window| window[0] == window[1]) {
+                return true;
+            }
+
+            // Check for sequential bytes (increasing)
+            let is_sequential_inc = key_bytes.windows(2)
+                .all(|window| window[1] == window[0].wrapping_add(1));
+
+            // Check for sequential bytes (decreasing)
+            let is_sequential_dec = key_bytes.windows(2)
+                .all(|window| window[1] == window[0].wrapping_sub(1));
+
+            if is_sequential_inc || is_sequential_dec {
+                return true;
+            }
+
+            // Check for common weak patterns
+            let common_weak = [
+                "00000000000000000000000000000000",
+                "ffffffffffffffffffffffffffffffff",
+                "0123456789abcdef0123456789abcdef",
+                "aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb",
+            ];
+
+            if common_weak.contains(&key_str.to_lowercase().as_str()) {
+                return true;
+            }
+        }
+        false
     }
 }

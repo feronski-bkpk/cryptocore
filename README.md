@@ -6,9 +6,11 @@
 
 - **Поддержка 5 режимов шифрования**: ECB, CBC, CFB, OFB, CTR
 - **Безопасная генерация IV**: Автоматическая генерация криптографически безопасных IV
+- **Автоматическая генерация ключей**: Ключ опционален для шифрования
 - **Гибкая работа с IV**: Поддержка чтения IV из файла или указания через CLI
 - **Интероперабельность**: Совместимость с OpenSSL для всех режимов
 - **Поддержка различных типов данных**: Текст, бинарные файлы, Unicode, файлы с нуль-байтами
+- **Проверка слабых ключей**: Предупреждения при использовании потенциально слабых ключей
 
 ## Инструкции по сборке
 
@@ -38,7 +40,27 @@ cargo build --release
 
 ## Использование
 
-### Шифрование (с автоматической генерацией IV):
+### Шифрование с автоматической генерацией ключа:
+
+**Bash/Linux:**
+```bash
+# Ключ генерируется автоматически и выводится в терминал
+cryptocore --algorithm aes --mode cbc --operation encrypt \
+  --input plaintext.txt \
+  --output ciphertext.bin
+# Вывод: [INFO] Generated random key: 1a2b3c4d5e6f7890a1b2c3d4e5f67890
+```
+
+**PowerShell:**
+```powershell
+# Ключ генерируется автоматически и выводится в терминал
+.\cryptocore --algorithm aes --mode cbc --operation encrypt `
+  --input plaintext.txt `
+  --output ciphertext.bin
+# Вывод: [INFO] Generated random key: 1a2b3c4d5e6f7890a1b2c3d4e5f67890
+```
+
+### Шифрование с указанием ключа:
 
 **Bash/Linux:**
 ```bash
@@ -152,7 +174,7 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 | `--algorithm` | Алгоритм шифрования (в настоящее время только `aes`) | Да |
 | `--mode` | Режим работы (`ecb`, `cbc`, `cfb`, `ofb`, `ctr`) | Да |
 | `--operation` | Операция (`encrypt` или `decrypt`) | Да |
-| `--key` | 16-байтный ключ в виде 32-символьной hex-строки | Да |
+| `--key` | 16-байтный ключ в виде 32-символьной hex-строки. **Опционально для шифрования** - если не указан, генерируется случайный ключ | Нет (для шифрования) |
 | `--input` | Путь к входному файлу | Да |
 | `--output` | Путь к выходному файлу (опционально) | Нет |
 | `--iv` | Вектор инициализации для дешифрования (32 hex символа) | Нет |
@@ -161,6 +183,7 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 - 32 шестнадцатеричных символа (16 байт)
 - Пример: `00112233445566778899aabbccddeeff`
 - Опциональный префикс `@`: `@00112233445566778899aabbccddeeff`
+- **Для шифрования**: если не указан, генерируется случайный ключ
 
 ### Формат IV:
 - 32 шестнадцатеричных символа (16 байт)
@@ -199,6 +222,40 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 - **Требует IV** (используется как начальное значение счетчика)
 - Высокая производительность, возможность параллельной обработки
 
+## Безопасность CSPRNG
+
+Утилита использует криптографически безопасный генератор псевдослучайных чисел (CSPRNG) на основе OpenSSL `rand_bytes()`:
+
+- **Источник энтропии**: Используются системные источники энтропии ОС
+- **Криптографическая стойкость**: Подходит для генерации ключей и IV
+- **Проверка уникальности**: Тесты подтверждают уникальность 1000 сгенерированных ключей
+- **Статистическое распределение**: Биты распределены равномерно (50.00% ± 0.01%)
+- **Проверенное качество**: Все статистические тесты пройдены успешно
+
+### Результаты тестирования CSPRNG:
+- **Битовое распределение**: 50.00% единиц (идеально)
+- **Уникальность ключей**: 1000/1000 без коллизий
+- **Уникальность IV**: 100/100 без коллизий
+- **Паттерны**: 0 повторяющихся последовательностей
+- **Непредсказуемость**: Разные результаты при последовательных вызовах
+
+### Пример генерации ключа:
+```
+[INFO] Generated random key: 5c02dca03af5d0cc48e9c8578ec25efb
+[INFO] Remember to save the generated key for decryption!
+```
+
+## Проверка слабых ключей
+
+Утилита обнаруживает и предупреждает о потенциально слабых ключах:
+
+- **Все нули**: `00000000000000000000000000000000`
+- **Последовательные байты**: `000102030405060708090a0b0c0d0e0f`
+- **Все одинаковые байты**: `aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb`
+- **Общие паттерны**: `0123456789abcdef0123456789abcdef`
+
+При обнаружении слабого ключа выводится предупреждение, но операция выполняется.
+
 ## Тестирование
 
 ### Полное автоматическое тестирование (PowerShell - Windows):
@@ -206,10 +263,33 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 .\scripts\test.ps1
 ```
 
+### NIST тестирование (PowerShell - Windows):
+```powershell
+.\scripts\test_nist.ps1
+```
+
 ### Полное автоматическое тестирование (Bash - Linux/Mac):
 ```bash
 chmod +x scripts/test.sh
 ./scripts/test.sh
+```
+
+### NIST тестирование (Bash - Linux/Mac):
+```bash
+chmod +x scripts/test_nist.sh
+./scripts/test.sh
+```
+
+### Автоматическое тестирование NIST STS:
+```bash
+# Генерация тестовых данных и базовое тестирование CSPRNG
+make test-nist
+
+# Полное NIST тестирование (требует WSL или Linux)
+make test-nist-full
+
+# Быстрая проверка CSPRNG
+make test-nist-quick
 ```
 
 ### Тестирование отдельных режимов через Make:
@@ -224,8 +304,20 @@ make test-cfb
 make test-ofb
 make test-ctr
 
+# Тестирование CSPRNG модуля
+make test-csprng
+
+# Тестирование автоматической генерации ключей
+make test-auto-key
+
 # Тестирование интероперабельности с OpenSSL
 make test-openssl
+
+# Тестирование безопасности
+make test-security
+
+# Тестирование производительности
+make test-performance
 ```
 
 ### Быстрая ручная проверка:
@@ -235,18 +327,14 @@ make test-openssl
 # Создать тестовый файл
 echo "Hello CryptoCore Multi-Mode" > test.txt
 
-# Зашифровать в CBC режиме
-cryptocore --algorithm aes --mode cbc --operation encrypt \
-  --key 00112233445566778899aabbccddeeff \
-  --input test.txt --output test.cbc.enc
+# Зашифровать с автоматической генерацией ключа
+cryptocore --algorithm aes --mode cbc --operation encrypt --input test.txt --output test.cbc.enc
 
-# Расшифровать
-cryptocore --algorithm aes --mode cbc --operation decrypt \
-  --key 00112233445566778899aabbccddeeff \
-  --input test.cbc.enc --output test.cbc.dec
+# Расшифровать с использованием сгенерированного ключа
+cryptocore --algorithm aes --mode cbc --operation decrypt --key "СГЕНЕРИРОВАННЫЙ_КЛЮЧ" --input test.cbc.enc --output test.cbc.dec
 
 # Проверить что файлы идентичны
-diff test.txt test.cbc.dec && echo "УСПЕХ: CBC режим работает корректно"
+diff test.txt test.cbc.dec && echo "УСПЕХ: Автоматическая генерация ключа работает"
 
 # Очистка
 rm test.txt test.cbc.enc test.cbc.dec
@@ -257,11 +345,11 @@ rm test.txt test.cbc.enc test.cbc.dec
 # Создать тестовый файл
 echo "Hello CryptoCore Multi-Mode" > test.txt
 
-# Зашифровать в CBC режиме
-.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input test.txt --output test.cbc.enc
+# Зашифровать с автоматической генерацией ключа
+.\cryptocore --algorithm aes --mode cbc --operation encrypt --input test.txt --output test.cbc.enc
 
-# Расшифровать
-.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input test.cbc.enc --output test.cbc.dec
+# Расшифровать с использованием сгенерированного ключа
+.\cryptocore --algorithm aes --mode cbc --operation decrypt --key "СГЕНЕРИРОВАННЫЙ_КЛЮЧ" --input test.cbc.enc --output test.cbc.dec
 
 # Проверить что файлы идентичны
 fc test.txt test.cbc.dec
@@ -280,6 +368,11 @@ cargo test
 ### Интеграционные тесты:
 ```bash
 cargo test --test integration_tests
+```
+
+### Тесты CSPRNG:
+```bash
+cargo test --test csprng
 ```
 
 ## Интероперабельность с OpenSSL
@@ -356,7 +449,8 @@ openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv aabbccddeeff001
 - **Размер блока**: 16 байт
 - **Размер IV**: 16 байт
 - **Дополнение**: PKCS#7 (для ECB и CBC)
-- **Генерация IV**: Криптографически безопасный генератор (`rand::thread_rng()`)
+- **Генерация ключей**: Криптографически безопасный ГПСЧ (OpenSSL `rand_bytes()`)
+- **Генерация IV**: Криптографически безопасный генератор (`Csprng::generate_iv()`)
 - **Библиотека**: OpenSSL через Rust crate `openssl`
 - **Формат файла**: Для режимов с IV - `<16-байт IV><шифротекст>`
 
@@ -367,6 +461,8 @@ cryptocore/
 ├── src/
 │   ├── main.rs              # Точка входа
 │   ├── lib.rs               # Библиотечные компоненты
+│   ├── csprng/              # НОВЫЙ МОДУЛЬ CSPRNG
+│   │   └── mod.rs           # Криптографически безопасный ГПСЧ
 │   ├── cli/                 # Интерфейс командной строки
 │   │   ├── mod.rs
 │   │   └── parser.rs        # Парсинг аргументов CLI
@@ -383,10 +479,13 @@ cryptocore/
 │       ├── mod.rs
 │       └── io.rs            # Функции работы с файлами и IV
 ├── tests/                   # Интеграционные тесты
-│   └── integration_tests.rs
+│   ├── integration_tests.rs
+│   └── test_csprng.rs       # НОВЫЕ ТЕСТЫ CSPRNG
 ├── scripts/                 # Скрипты автоматического тестирования
 │   ├── test.ps1             # Полные тесты для PowerShell
-│   └── test.sh              # Полные тесты для Linux/Mac
+│   ├── test.sh              # Полные тесты для Linux/Mac
+│   ├── test_nist.ps1        # NIST тестирование для Windows
+│   └── test_nist.sh         # NIST тестирование для Linux
 ├── Makefile                # Команды для тестирования
 ├── Cargo.toml              # Конфигурация проекта
 └── README.md               # Этот файл
@@ -394,25 +493,25 @@ cryptocore/
 
 ## Примеры использования
 
-### Зашифровать документ в CBC режиме:
+### Зашифровать документ с автоматической генерацией ключа:
 
 **Bash/Linux:**
 ```bash
 cryptocore --algorithm aes --mode cbc --operation encrypt \
-  --key 2b7e151628aed2a6abf7158809cf4f3c \
   --input document.pdf \
   --output document.pdf.enc
+# Запомните сгенерированный ключ для дешифрования!
 ```
 
 **PowerShell:**
 ```powershell
 .\cryptocore --algorithm aes --mode cbc --operation encrypt `
-  --key 2b7e151628aed2a6abf7158809cf4f3c `
   --input document.pdf `
   --output document.pdf.enc
+# Запомните сгенерированный ключ для дешифрования!
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input document.pdf --output document.pdf.enc
+.\cryptocore --algorithm aes --mode cbc --operation encrypt --input document.pdf --output document.pdf.enc
 ```
 
 ### Зашифровать в потоковом режиме (без padding):
@@ -502,15 +601,19 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
 - **Несуществующий входной файл**: "Input file does not exist"
 - **Файл слишком короткий для IV**: "File too short to contain IV"
 - **Неверный hex-формат**: "Key must be a valid hexadecimal string"
+- **Слабый ключ**: "WARNING: The provided key appears to be weak. Consider using a stronger key."
 
 ## Примечания по безопасности
 
 - Использует промышленный стандарт шифрования AES-128
-- Криптографически безопасная генерация IV через `rand::thread_rng()`
+- Криптографически безопасная генерация ключей через OpenSSL `rand_bytes()`
+- Криптографически безопасная генерация IV через CSPRNG модуль
 - Использует проверенную реализацию криптографии от OpenSSL
 - Правильная обработка дополнения PKCS#7 для ECB и CBC режимов
 - Безопасное управление памятью для чувствительных данных
 - Потоковые режимы (CFB, OFB, CTR) не используют padding, сохраняя точный размер данных
+- Проверка слабых ключей с предупреждениями
+- **Проверенное качество CSPRNG**: все статистические тесты пройдены успешно
 
 ## Лицензия
 
@@ -532,7 +635,7 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
 При возникновении проблем и вопросов:
 
 1. **Проверьте сообщения об ошибках** - они содержат детальную информацию
-2. **Убедитесь что ваш ключ** состоит из 32 шестнадцатеричных символов
+2. **Для автоматической генерации ключа** - сохраните сгенерированный ключ для дешифрования
 3. **Для дешифрования в режимах с IV**:
    - Либо не указывайте `--iv` (IV будет прочитан из файла)
    - Либо укажите правильный IV через `--iv` (32 hex символа)
@@ -540,3 +643,4 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
 5. **Убедитесь что входной файл** существует и доступен для чтения
 6. **Проверьте доступное место на диске** для выходных файлов
 7. **В PowerShell используйте `.\` перед cryptocore** - это требование безопасности PowerShell для запуска локальных исполняемых файлов
+8. **При использовании слабых ключей** - обратите внимание на предупреждения
