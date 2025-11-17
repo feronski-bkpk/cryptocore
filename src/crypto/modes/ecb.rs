@@ -93,8 +93,8 @@ fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
 
 #[cfg(test)]
 mod tests {
-    use crate::crypto::BlockMode;
     use super::*;
+    use crate::crypto::BlockMode;
 
     #[test]
     fn test_ecb_round_trip() {
@@ -112,14 +112,14 @@ mod tests {
     fn test_ecb_padding() {
         let key = "00112233445566778899aabbccddeeff";
         let ecb = Ecb::new(key).unwrap();
-        
+
         let test_cases = [
             b"".to_vec(),
             b"A".to_vec(),
             b"AB".to_vec(),
             b"ABC".to_vec(),
-            b"ABCDEFGHIJKLMNOP".to_vec(),  
-            b"ABCDEFGHIJKLMNOPQ".to_vec(), 
+            b"ABCDEFGHIJKLMNOP".to_vec(),
+            b"ABCDEFGHIJKLMNOPQ".to_vec(),
         ];
 
         for original in test_cases {
@@ -137,7 +137,7 @@ mod tests {
 
         let ciphertext1 = ecb.encrypt(plaintext, &[]).unwrap();
         let ciphertext2 = ecb.encrypt(plaintext, &[]).unwrap();
-        
+
         assert_eq!(ciphertext1, ciphertext2);
     }
 }

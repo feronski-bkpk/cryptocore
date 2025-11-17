@@ -4,21 +4,13 @@ set -e
 
 echo "Starting CryptoCore Complete Automated Tests..."
 
-# Colors for output
+# Colors and formatting
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
-
-write_status() {
-    if [ $1 -eq 0 ]; then
-        echo -e "${GREEN}SUCCESS: $2${NC}"
-    else
-        echo -e "${RED}FAILED: $2${NC}"
-    fi
-}
 
 write_step() {
     echo -e "${BLUE}>>> $1${NC}"
@@ -28,6 +20,14 @@ write_section() {
     echo -e "${CYAN}================================================${NC}"
     echo -e "${CYAN}  $1${NC}"
     echo -e "${CYAN}================================================${NC}"
+}
+
+write_status() {
+    if [ $1 -eq 0 ]; then
+        echo -e "${GREEN}SUCCESS: $2${NC}"
+    else
+        echo -e "${RED}FAILED: $2${NC}"
+    fi
 }
 
 # Get the script directory and project root
@@ -108,7 +108,7 @@ else
     # Fallback using /dev/urandom with head
     head -c 1024 /dev/urandom > "$SCRIPT_DIR/random_1k.bin" 2>/dev/null || {
         # Ultimate fallback - create deterministic "random" data
-        python -c "import os; open('$SCRIPT_DIR/random_1k.bin', 'wb').write(os.urandom(1024))" 2>/dev/null || {
+        python3 -c "import os; open('$SCRIPT_DIR/random_1k.bin', 'wb').write(os.urandom(1024))" 2>/dev/null || {
             for i in {0..1023}; do
                 printf "\\x$(printf %02x $((RANDOM % 256)))" >> "$SCRIPT_DIR/random_1k.bin"
             done
@@ -125,20 +125,115 @@ write_step "Testing CSPRNG module"
 cargo test --test csprng -- --nocapture
 write_status $? "CSPRNG module tests"
 
-# Initialize test tracking variables
-all_tests_passed=true
-test_results=()
-KEY="00112233445566778899aabbccddeeff"
+# Step 5: Hash Function Tests
+write_section "Hash Function Tests"
 
-# Step 5: Automatic Key Generation Tests
+write_step "Testing hash module"
+cargo test --test hash -- --nocapture
+write_status $? "Hash module tests"
+
+# Test SHA-256 with known vectors
+write_step "Testing SHA-256 known vectors"
+sha256_test_file="$SCRIPT_DIR/sha256_test.txt"
+echo -n "abc" > "$sha256_test_file"
+
+sha256_output=$($CRYPTOCORE_BIN dgst --algorithm sha256 --input "$sha256_test_file" 2>&1)
+sha256_output_text="$sha256_output"
+
+if echo "$sha256_output_text" | grep -q "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c"; then
+    write_status 0 "SHA-256 known vector test"
+    test_results+=("PASSED: Hash - SHA-256 known vector")
+else
+    write_status 1 "SHA-256 known vector test failed"
+    echo -e "${YELLOW}Expected: 1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c${NC}"
+    echo -e "${YELLOW}Got: $sha256_output_text${NC}"
+    test_results+=("FAILED: Hash - SHA-256 known vector")
+    all_tests_passed=false
+fi
+
+# Test SHA3-256 with known vectors
+write_step "Testing SHA3-256 known vectors"
+sha3_test_file="$SCRIPT_DIR/sha3_test.txt"
+echo -n "abc" > "$sha3_test_file"
+
+sha3_output=$($CRYPTOCORE_BIN dgst --algorithm sha3-256 --input "$sha3_test_file" 2>&1)
+sha3_output_text="$sha3_output"
+
+if echo "$sha3_output_text" | grep -q "d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1"; then
+    write_status 0 "SHA3-256 known vector test"
+    test_results+=("PASSED: Hash - SHA3-256 known vector")
+else
+    write_status 1 "SHA3-256 known vector test failed"
+    echo -e "${YELLOW}Expected: d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1${NC}"
+    echo -e "${YELLOW}Got: $sha3_output_text${NC}"
+    test_results+=("FAILED: Hash - SHA3-256 known vector")
+    all_tests_passed=false
+fi
+
+# Test hash output to file
+write_step "Testing hash output to file"
+hash_output_file="$SCRIPT_DIR/hash_output.txt"
+$CRYPTOCORE_BIN dgst --algorithm sha256 --input "$sha256_test_file" --output "$hash_output_file"
+
+if [ $? -eq 0 ] && [ -f "$hash_output_file" ]; then
+    hash_content=$(cat "$hash_output_file")
+    # В файл пишется только хеш, без имени файла
+    if echo "$hash_content" | grep -q "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c"; then
+        write_status 0 "Hash output to file works"
+        test_results+=("PASSED: Hash - Output to file")
+    else
+        write_status 1 "Hash output to file content mismatch"
+        echo -e "${YELLOW}Expected hash in file: 1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c${NC}"
+        echo -e "${YELLOW}Got in file: $hash_content${NC}"
+        test_results+=("FAILED: Hash - Output to file")
+        all_tests_passed=false
+    fi
+else
+    write_status 1 "Hash output to file failed"
+    test_results+=("FAILED: Hash - Output to file")
+    all_tests_passed=false
+fi
+
+# Test hash with different file types
+write_step "Testing hash with different file types"
+hash_algorithms=("sha256" "sha3-256")
+
+for algorithm in "${hash_algorithms[@]}"; do
+    for filename in "${!testFiles[@]}"; do
+        file_path="$SCRIPT_DIR/$filename"
+        echo -n "  Testing $algorithm with $filename..."
+
+        hash_output=$($CRYPTOCORE_BIN dgst --algorithm "$algorithm" --input "$file_path" 2>&1)
+        if [ $? -eq 0 ]; then
+            hash_output_text="$hash_output"
+            if echo "$hash_output_text" | grep -q "^[0-9a-f]\{64\}"; then
+                echo -e "${GREEN} Success${NC}"
+                test_results+=("PASSED: Hash - $algorithm with $filename")
+            else
+                echo -e "${RED} Invalid format${NC}"
+                test_results+=("FAILED: Hash - $algorithm with $filename (format)")
+                all_tests_passed=false
+            fi
+        else
+            echo -e "${RED} Failed${NC}"
+            test_results+=("FAILED: Hash - $algorithm with $filename")
+            all_tests_passed=false
+        fi
+    done
+done
+
+# Cleanup hash test files
+rm -f "$sha256_test_file" "$sha3_test_file" "$hash_output_file"
+
+# Step 6: Automatic Key Generation Tests
 write_section "Automatic Key Generation Tests"
 
 write_step "Testing encryption without --key parameter"
 auto_key_test_file="$SCRIPT_DIR/auto_key_test.txt"
 echo "Testing automatic key generation" > "$auto_key_test_file"
 
-# Run encryption without key
-auto_key_output=$($CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --input "$auto_key_test_file" --output "$auto_key_test_file.enc" 2>&1)
+# Capture both stdout and stderr
+auto_key_output=$($CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation encrypt --input "$auto_key_test_file" --output "$auto_key_test_file.enc" 2>&1)
 auto_key_success=$?
 
 if [ $auto_key_success -eq 0 ]; then
@@ -148,7 +243,7 @@ if [ $auto_key_success -eq 0 ]; then
         echo -e "${GREEN}Generated key: $generated_key${NC}"
 
         # Test decryption with generated key
-        $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$generated_key" --input "$auto_key_test_file.enc" --output "$auto_key_test_file.dec"
+        $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation decrypt --key "$generated_key" --input "$auto_key_test_file.enc" --output "$auto_key_test_file.dec"
         decrypt_success=$?
 
         if [ $decrypt_success -eq 0 ]; then
@@ -183,7 +278,7 @@ fi
 
 rm -f "$auto_key_test_file" "$auto_key_test_file.enc" "$auto_key_test_file.dec"
 
-# Step 6: Weak Key Detection Tests
+# Step 7: Weak Key Detection Tests
 write_section "Weak Key Detection Tests"
 
 write_step "Testing weak key detection"
@@ -191,7 +286,7 @@ weak_key_test_file="$SCRIPT_DIR/weak_key_test.txt"
 echo "Weak key test" > "$weak_key_test_file"
 
 # Test all zeros key (should show warning but work)
-weak_key_output=$($CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "00000000000000000000000000000000" --input "$weak_key_test_file" --output "$weak_key_test_file.enc" 2>&1)
+weak_key_output=$($CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation encrypt --key "00000000000000000000000000000000" --input "$weak_key_test_file" --output "$weak_key_test_file.enc" 2>&1)
 weak_key_warning=$(echo "$weak_key_output" | grep -q "WARNING.*weak" && echo true || echo false)
 weak_key_success=$?
 
@@ -205,7 +300,7 @@ else
 fi
 
 # Test sequential key (should show warning but work)
-sequential_key_output=$($CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "000102030405060708090a0b0c0d0e0f" --input "$weak_key_test_file" --output "$weak_key_test_file.enc2" 2>&1)
+sequential_key_output=$($CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation encrypt --key "000102030405060708090a0b0c0d0e0f" --input "$weak_key_test_file" --output "$weak_key_test_file.enc2" 2>&1)
 sequential_key_warning=$(echo "$sequential_key_output" | grep -q "WARNING.*weak" && echo true || echo false)
 sequential_key_success=$?
 
@@ -220,8 +315,12 @@ fi
 
 rm -f "$weak_key_test_file" "$weak_key_test_file.enc" "$weak_key_test_file.enc2"
 
-# Step 7: Test all encryption modes comprehensively
+# Step 8: Test all encryption modes comprehensively
 write_section "Testing All Encryption Modes"
+
+KEY="00112233445566778899aabbccddeeff"
+all_tests_passed=true
+test_results=()
 
 # All supported modes
 modes=("ecb" "cbc" "cfb" "ofb" "ctr")
@@ -238,7 +337,7 @@ for mode in "${modes[@]}"; do
         decrypted_file="$SCRIPT_DIR/$filename.$mode.dec"
 
         # Encrypt
-        if ! $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$file_path" --output "$encrypted_file"; then
+        if ! $CRYPTOCORE_BIN crypto --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$file_path" --output "$encrypted_file"; then
             echo -e "${RED} Encryption failed${NC}"
             test_results+=("FAILED: $filename.$mode - Encryption failed")
             all_tests_passed=false
@@ -265,7 +364,7 @@ for mode in "${modes[@]}"; do
         fi
 
         # Decrypt
-        if ! $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$encrypted_file" --output "$decrypted_file"; then
+        if ! $CRYPTOCORE_BIN crypto --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$encrypted_file" --output "$decrypted_file"; then
             echo -e "${RED} Decryption failed${NC}"
             test_results+=("FAILED: $filename.$mode - Decryption failed")
             all_tests_passed=false
@@ -296,7 +395,7 @@ for mode in "${modes[@]}"; do
         decrypted_file="$SCRIPT_DIR/$binary_file.$mode.dec"
 
         # Encrypt
-        if ! $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$binary_path" --output "$encrypted_file"; then
+        if ! $CRYPTOCORE_BIN crypto --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$binary_path" --output "$encrypted_file"; then
             echo -e "${RED} Encryption failed${NC}"
             test_results+=("FAILED: $binary_file.$mode - Encryption failed")
             all_tests_passed=false
@@ -304,7 +403,7 @@ for mode in "${modes[@]}"; do
         fi
 
         # Decrypt
-        if ! $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$encrypted_file" --output "$decrypted_file"; then
+        if ! $CRYPTOCORE_BIN crypto --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$encrypted_file" --output "$decrypted_file"; then
             echo -e "${RED} Decryption failed${NC}"
             test_results+=("FAILED: $binary_file.$mode - Decryption failed")
             all_tests_passed=false
@@ -325,7 +424,7 @@ for mode in "${modes[@]}"; do
     done
 done
 
-# Step 8: Advanced IV handling tests
+# Step 9: Advanced IV handling tests
 write_section "Testing IV Handling"
 
 # Test IV provided for decryption
@@ -335,7 +434,7 @@ echo "IV test data" > "$iv_test_file"
 iv_encrypted_file="$SCRIPT_DIR/iv_encrypted.bin"
 
 # Encrypt with auto IV
-if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input "$iv_test_file" --output "$iv_encrypted_file"; then
+if $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input "$iv_test_file" --output "$iv_encrypted_file"; then
     # Extract IV from encrypted file
     encrypted_data_size=$(wc -c < "$iv_encrypted_file")
     if [ "$encrypted_data_size" -lt 16 ]; then
@@ -352,7 +451,7 @@ if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" -
         iv_decrypted_file="$SCRIPT_DIR/iv_decrypted.txt"
 
         # Decrypt with provided IV
-        if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$iv_hex" --input "$ciphertext_file" --output "$iv_decrypted_file"; then
+        if $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$iv_hex" --input "$ciphertext_file" --output "$iv_decrypted_file"; then
             if cmp -s "$iv_test_file" "$iv_decrypted_file"; then
                 write_status 0 "Decryption with provided IV works"
                 test_results+=("PASSED: IV handling - Provided IV decryption")
@@ -375,13 +474,13 @@ fi
 
 rm -f "$iv_test_file" "$iv_encrypted_file" "$ciphertext_file" "$iv_decrypted_file" 2>/dev/null
 
-# Step 9: Validation and error handling tests
+# Step 10: Validation and error handling tests
 write_section "Validation and Error Handling"
 
 # Test invalid key
 write_step "Testing invalid key rejection"
 short_file_path="$SCRIPT_DIR/short.txt"
-if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "invalid" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation encrypt --key "invalid" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     write_status 1 "Should reject invalid key"
     test_results+=("FAILED: Validation - Invalid key accepted")
     all_tests_passed=false
@@ -392,7 +491,7 @@ fi
 
 # Test wrong key length
 write_step "Testing wrong key length"
-if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "001122" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation encrypt --key "001122" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     write_status 1 "Should reject wrong key length"
     test_results+=("FAILED: Validation - Wrong key length accepted")
     all_tests_passed=false
@@ -403,7 +502,7 @@ fi
 
 # Test nonexistent file
 write_step "Testing nonexistent file rejection"
-if $CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "$SCRIPT_DIR/nonexistent_file_12345.txt" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "$SCRIPT_DIR/nonexistent_file_12345.txt" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     write_status 1 "Should reject nonexistent file"
     test_results+=("FAILED: Validation - Nonexistent file accepted")
     all_tests_passed=false
@@ -414,7 +513,7 @@ fi
 
 # Test IV provided during encryption (should fail)
 write_step "Testing IV rejection during encryption"
-if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --iv "000102030405060708090A0B0C0D0E0F" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
+if $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation encrypt --key "$KEY" --iv "000102030405060708090A0B0C0D0E0F" --input "$short_file_path" --output "$SCRIPT_DIR/test.enc" 2>/dev/null; then
     write_status 1 "Should reject IV during encryption"
     test_results+=("FAILED: Validation - IV accepted during encryption")
     all_tests_passed=false
@@ -427,7 +526,7 @@ fi
 write_step "Testing missing IV detection"
 short_cipher_file="$SCRIPT_DIR/short_cipher.bin"
 echo "test" > "$short_cipher_file"
-if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --input "$short_cipher_file" --output "$SCRIPT_DIR/test.dec" 2>/dev/null; then
+if $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation decrypt --key "$KEY" --input "$short_cipher_file" --output "$SCRIPT_DIR/test.dec" 2>/dev/null; then
     write_status 1 "Should detect missing IV"
     test_results+=("FAILED: Validation - Missing IV not detected")
     all_tests_passed=false
@@ -437,7 +536,18 @@ else
 fi
 rm -f "$short_cipher_file"
 
-# Step 10: File handling tests
+# Test invalid hash algorithm
+write_step "Testing invalid hash algorithm rejection"
+if $CRYPTOCORE_BIN dgst --algorithm "invalid_hash" --input "$short_file_path" 2>/dev/null; then
+    write_status 1 "Should reject invalid hash algorithm"
+    test_results+=("FAILED: Validation - Invalid hash algorithm accepted")
+    all_tests_passed=false
+else
+    write_status 0 "Invalid hash algorithm rejected"
+    test_results+=("PASSED: Validation - Invalid hash algorithm rejected")
+fi
+
+# Step 11: File handling tests
 write_section "File Handling Tests"
 
 # Test automatic output naming
@@ -445,7 +555,7 @@ write_step "Testing automatic output naming"
 auto_test_file="$SCRIPT_DIR/auto_test.txt"
 echo "Auto name test" > "$auto_test_file"
 
-$CRYPTOCORE_BIN --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "$auto_test_file"
+$CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation encrypt --key "$KEY" --input "$auto_test_file"
 if [ $? -eq 0 ] && [ -f "$auto_test_file.enc" ]; then
     write_status 0 "Automatic encryption naming works"
     test_results+=("PASSED: File handling - Auto encryption naming")
@@ -455,7 +565,7 @@ else
     all_tests_passed=false
 fi
 
-$CRYPTOCORE_BIN --algorithm aes --mode ecb --operation decrypt --key "$KEY" --input "$auto_test_file.enc"
+$CRYPTOCORE_BIN crypto --algorithm aes --mode ecb --operation decrypt --key "$KEY" --input "$auto_test_file.enc"
 if [ $? -eq 0 ] && [ -f "$auto_test_file.enc.dec" ]; then
     write_status 0 "Automatic decryption naming works"
     test_results+=("PASSED: File handling - Auto decryption naming")
@@ -467,7 +577,7 @@ fi
 
 rm -f "$auto_test_file" "$auto_test_file.enc" "$auto_test_file.enc.dec"
 
-# Step 11: OpenSSL interoperability tests
+# Step 12: OpenSSL interoperability tests
 write_section "OpenSSL Interoperability Tests"
 
 if command -v openssl &> /dev/null; then
@@ -479,7 +589,7 @@ if command -v openssl &> /dev/null; then
     our_encrypted_file="$SCRIPT_DIR/our_encrypted.bin"
 
     # Encrypt with our tool
-    if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input "$openssl_test1_file" --output "$our_encrypted_file"; then
+    if $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation encrypt --key "$KEY" --input "$openssl_test1_file" --output "$our_encrypted_file"; then
         # Extract IV and ciphertext
         iv_file="$SCRIPT_DIR/our_iv.bin"
         ciphertext_file="$SCRIPT_DIR/our_ciphertext.bin"
@@ -522,7 +632,7 @@ if command -v openssl &> /dev/null; then
     if openssl enc -aes-128-cbc -K "$KEY" -iv "$TEST_IV" -in "$openssl_test2_file" -out "$openssl_encrypted_file" 2>/dev/null; then
         # Decrypt with our tool
         our_decrypted_file="$SCRIPT_DIR/our_decrypted.txt"
-        if $CRYPTOCORE_BIN --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$TEST_IV" --input "$openssl_encrypted_file" --output "$our_decrypted_file"; then
+        if $CRYPTOCORE_BIN crypto --algorithm aes --mode cbc --operation decrypt --key "$KEY" --iv "$TEST_IV" --input "$openssl_encrypted_file" --output "$our_decrypted_file"; then
             if cmp -s "$openssl_test2_file" "$our_decrypted_file"; then
                 write_status 0 "OpenSSL -> OurTool: PASS"
                 test_results+=("PASSED: Interop - OpenSSL to OurTool")
@@ -549,66 +659,80 @@ else
     test_results+=("SKIPPED: OpenSSL interoperability")
 fi
 
-# Step 12: Performance and stress tests
+# Step 13: Performance and stress tests
 write_section "Performance and Stress Tests"
 
 write_step "Testing with larger files"
 # Create a larger test file if we have enough space
 large_test_file="$SCRIPT_DIR/large_test.bin"
-# Create 1MB file
-if command -v dd &> /dev/null; then
-    dd if=/dev/urandom of="$large_test_file" bs=1M count=1 2>/dev/null
-else
-    head -c 1048576 /dev/urandom > "$large_test_file" 2>/dev/null
-fi
+# Check available disk space
+available_space=$(df "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
+if [ "$available_space" -gt 10485760 ]; then  # 10MB in KB
+    # Create 1MB file
+    if command -v dd &> /dev/null; then
+        dd if=/dev/urandom of="$large_test_file" bs=1M count=1 2>/dev/null
+    else
+        head -c 1048576 /dev/urandom > "$large_test_file" 2>/dev/null
+    fi
 
-if [ -f "$large_test_file" ] && [ -s "$large_test_file" ]; then
-    for mode in "ecb" "cbc"; do
-        echo -n "  Testing 1MB file with $mode..."
+    if [ -f "$large_test_file" ] && [ -s "$large_test_file" ]; then
+        for mode in "ecb" "cbc"; do
+            echo -n "  Testing 1MB file with $mode..."
 
-        large_encrypted_file="$SCRIPT_DIR/large_encrypted.bin"
-        large_decrypted_file="$SCRIPT_DIR/large_decrypted.bin"
+            large_encrypted_file="$SCRIPT_DIR/large_encrypted.bin"
+            large_decrypted_file="$SCRIPT_DIR/large_decrypted.bin"
 
-        # Encrypt
-        if $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$large_test_file" --output "$large_encrypted_file"; then
-            encrypt_success=0
-        else
-            encrypt_success=1
-        fi
-
-        # Decrypt
-        if [ $encrypt_success -eq 0 ] && $CRYPTOCORE_BIN --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$large_encrypted_file" --output "$large_decrypted_file"; then
-            decrypt_success=0
-        else
-            decrypt_success=1
-        fi
-
-        if [ $encrypt_success -eq 0 ] && [ $decrypt_success -eq 0 ]; then
-            # Compare files (check first and last 100 bytes for performance)
-            if cmp -s "$large_test_file" "$large_decrypted_file"; then
-                echo -e "${GREEN} Success${NC}"
-                test_results+=("PASSED: Performance - 1MB file with $mode")
+            # Encrypt
+            if $CRYPTOCORE_BIN crypto --algorithm aes --mode "$mode" --operation encrypt --key "$KEY" --input "$large_test_file" --output "$large_encrypted_file"; then
+                encrypt_success=0
             else
-                echo -e "${RED} Content mismatch${NC}"
+                encrypt_success=1
+            fi
+
+            # Decrypt
+            if [ $encrypt_success -eq 0 ] && $CRYPTOCORE_BIN crypto --algorithm aes --mode "$mode" --operation decrypt --key "$KEY" --input "$large_encrypted_file" --output "$large_decrypted_file"; then
+                decrypt_success=0
+            else
+                decrypt_success=1
+            fi
+
+            if [ $encrypt_success -eq 0 ] && [ $decrypt_success -eq 0 ]; then
+                # Compare files (check first and last 100 bytes for performance)
+                if cmp -s "$large_test_file" "$large_decrypted_file"; then
+                    echo -e "${GREEN} Success${NC}"
+                    test_results+=("PASSED: Performance - 1MB file with $mode")
+                else
+                    echo -e "${RED} Content mismatch${NC}"
+                    test_results+=("FAILED: Performance - 1MB file with $mode")
+                    all_tests_passed=false
+                fi
+            else
+                echo -e "${RED} Execution failed${NC}"
                 test_results+=("FAILED: Performance - 1MB file with $mode")
                 all_tests_passed=false
             fi
-        else
-            echo -e "${RED} Execution failed${NC}"
-            test_results+=("FAILED: Performance - 1MB file with $mode")
-            all_tests_passed=false
-        fi
 
-        rm -f "$large_encrypted_file" "$large_decrypted_file"
-    done
+            rm -f "$large_encrypted_file" "$large_decrypted_file"
+        done
 
-    rm -f "$large_test_file"
+        rm -f "$large_test_file"
+    else
+        echo -e "${YELLOW}  Skipping large file tests (file creation failed)${NC}"
+        test_results+=("SKIPPED: Performance - Large file tests")
+    fi
 else
     echo -e "${YELLOW}  Skipping large file tests (insufficient disk space)${NC}"
     test_results+=("SKIPPED: Performance - Large file tests")
 fi
 
-# Step 13: Cleanup
+# Step 14: Integration tests
+write_section "Integration Tests"
+
+write_step "Running integration tests"
+cargo test --test integration_tests -- --nocapture
+write_status $? "Integration tests"
+
+# Step 15: Cleanup
 write_section "Cleaning Up"
 
 for filename in "${!testFiles[@]}"; do
@@ -616,7 +740,7 @@ for filename in "${!testFiles[@]}"; do
 done
 rm -f "$SCRIPT_DIR/binary_16.bin" "$SCRIPT_DIR/binary_with_nulls.bin" "$SCRIPT_DIR/random_1k.bin"
 
-# Step 14: Results summary
+# Step 16: Results summary
 write_section "Test Results Summary"
 
 passed_count=0
@@ -648,9 +772,10 @@ echo
 
 if $all_tests_passed; then
     echo -e "${GREEN}ALL TESTS PASSED! CryptoCore is fully functional!${NC}"
-    echo -e "${GREEN}All requirements from M3 document are satisfied${NC}"
+    echo -e "${GREEN}All requirements from M4 document are satisfied${NC}"
     echo -e "${GREEN}CSPRNG module working with automatic key generation${NC}"
     echo -e "${GREEN}All 5 encryption modes working: ECB, CBC, CFB, OFB, CTR${NC}"
+    echo -e "${GREEN}Hash functions SHA-256 and SHA3-256 working correctly${NC}"
     echo -e "${GREEN}Comprehensive testing completed successfully${NC}"
     echo -e "${GREEN}File handling, validation, and interoperability verified${NC}"
 else
@@ -659,3 +784,7 @@ else
 fi
 
 echo -e "${CYAN}================================================${NC}"
+
+echo
+echo "Press any key to exit..."
+read -n 1 -s

@@ -1,10 +1,11 @@
 # CryptoCore
 
-Командная утилита для шифрования и дешифрования файлов с использованием AES-128 в различных режимах работы.
+Командная утилита для шифрования и дешифрования файлов с использованием AES-128 в различных режимах работы, а также вычисления криптографических хешей.
 
 ## Возможности
 
 - **Поддержка 5 режимов шифрования**: ECB, CBC, CFB, OFB, CTR
+- **Криптографические хеш-функции**: SHA-256 и SHA3-256 для проверки целостности данных
 - **Безопасная генерация IV**: Автоматическая генерация криптографически безопасных IV
 - **Автоматическая генерация ключей**: Ключ опционален для шифрования
 - **Гибкая работа с IV**: Поддержка чтения IV из файла или указания через CLI
@@ -40,12 +41,20 @@ cargo build --release
 
 ## Использование
 
+### Команды CryptoCore:
+
+Утилита поддерживает две основные команды:
+- **`crypto`** - для шифрования и дешифрования файлов
+- **`dgst`** - для вычисления хеш-сумм файлов
+
+---
+
 ### Шифрование с автоматической генерацией ключа:
 
 **Bash/Linux:**
 ```bash
 # Ключ генерируется автоматически и выводится в терминал
-cryptocore --algorithm aes --mode cbc --operation encrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
   --input plaintext.txt \
   --output ciphertext.bin
 # Вывод: [INFO] Generated random key: 1a2b3c4d5e6f7890a1b2c3d4e5f67890
@@ -54,7 +63,7 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
 **PowerShell:**
 ```powershell
 # Ключ генерируется автоматически и выводится в терминал
-.\cryptocore --algorithm aes --mode cbc --operation encrypt `
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt `
   --input plaintext.txt `
   --output ciphertext.bin
 # Вывод: [INFO] Generated random key: 1a2b3c4d5e6f7890a1b2c3d4e5f67890
@@ -65,7 +74,7 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
 **Bash/Linux:**
 ```bash
 # Для режимов с IV (CBC, CFB, OFB, CTR) - IV генерируется автоматически
-cryptocore --algorithm aes --mode cbc --operation encrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
   --key 00112233445566778899aabbccddeeff \
   --input plaintext.txt \
   --output ciphertext.bin
@@ -74,13 +83,13 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
 **PowerShell:**
 ```powershell
 # Для режимов с IV (CBC, CFB, OFB, CTR) - IV генерируется автоматически
-.\cryptocore --algorithm aes --mode cbc --operation encrypt `
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt `
   --key 00112233445566778899aabbccddeeff `
   --input plaintext.txt `
   --output ciphertext.bin
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input plaintext.txt --output ciphertext.bin
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input plaintext.txt --output ciphertext.bin
 ```
 
 ### Дешифрование (чтение IV из файла):
@@ -88,7 +97,7 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
 **Bash/Linux:**
 ```bash
 # IV автоматически читается из начала файла
-cryptocore --algorithm aes --mode cbc --operation decrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
   --key 00112233445566778899aabbccddeeff \
   --input ciphertext.bin \
   --output decrypted.txt
@@ -97,13 +106,13 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 **PowerShell:**
 ```powershell
 # IV автоматически читается из начала файла
-.\cryptocore --algorithm aes --mode cbc --operation decrypt `
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt `
   --key 00112233445566778899aabbccddeeff `
   --input ciphertext.bin `
   --output decrypted.txt
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
 ```
 
 ### Дешифрование с указанием IV:
@@ -111,7 +120,7 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 **Bash/Linux:**
 ```bash
 # IV указывается явно через --iv
-cryptocore --algorithm aes --mode cbc --operation decrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
   --key 00112233445566778899aabbccddeeff \
   --iv aabbccddeeff00112233445566778899 \
   --input ciphertext.bin \
@@ -121,14 +130,14 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 **PowerShell:**
 ```powershell
 # IV указывается явно через --iv
-.\cryptocore --algorithm aes --mode cbc --operation decrypt `
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt `
   --key 00112233445566778899aabbccddeeff `
   --iv aabbccddeeff00112233445566778899 `
   --input ciphertext.bin `
   --output decrypted.txt
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input ciphertext.bin --output decrypted.txt
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input ciphertext.bin --output decrypted.txt
 ```
 
 ### ECB режим (без IV):
@@ -136,13 +145,13 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 **Bash/Linux:**
 ```bash
 # Шифрование
-cryptocore --algorithm aes --mode ecb --operation encrypt \
+cryptocore crypto --algorithm aes --mode ecb --operation encrypt \
   --key 00112233445566778899aabbccddeeff \
   --input plaintext.txt \
   --output ciphertext.bin
 
 # Дешифрование
-cryptocore --algorithm aes --mode ecb --operation decrypt \
+cryptocore crypto --algorithm aes --mode ecb --operation decrypt \
   --key 00112233445566778899aabbccddeeff \
   --input ciphertext.bin \
   --output decrypted.txt
@@ -151,23 +160,64 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 **PowerShell:**
 ```powershell
 # Шифрование
-.\cryptocore --algorithm aes --mode ecb --operation encrypt `
+.\cryptocore crypto --algorithm aes --mode ecb --operation encrypt `
   --key 00112233445566778899aabbccddeeff `
   --input plaintext.txt `
   --output ciphertext.bin
 
 # Дешифрование
-.\cryptocore --algorithm aes --mode ecb --operation decrypt `
+.\cryptocore crypto --algorithm aes --mode ecb --operation decrypt `
   --key 00112233445566778899aabbccddeeff `
   --input ciphertext.bin `
   --output decrypted.txt
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode ecb --operation encrypt --key 00112233445566778899aabbccddeeff --input plaintext.txt --output ciphertext.bin
-.\cryptocore --algorithm aes --mode ecb --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
+.\cryptocore crypto --algorithm aes --mode ecb --operation encrypt --key 00112233445566778899aabbccddeeff --input plaintext.txt --output ciphertext.bin
+.\cryptocore crypto --algorithm aes --mode ecb --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
+```
+
+---
+
+### Вычисление хеш-сумм файлов:
+
+**Bash/Linux:**
+```bash
+# SHA-256 хеш файла
+cryptocore dgst --algorithm sha256 --input document.pdf
+# Вывод: 5d5b09f6dcb2d53a5fffc60c4ac0d55fb052072fa2fe5d95f011b5d5d5b0b05 document.pdf
+
+# SHA3-256 хеш файла
+cryptocore dgst --algorithm sha3-256 --input backup.tar
+# Вывод: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532 backup.tar
+
+# Хеш с выводом в файл
+cryptocore dgst --algorithm sha256 --input important.dat --output important.sha256
+
+# Хеширование из stdin
+echo -n "abc" | cryptocore dgst --algorithm sha256 --input -
+# Вывод: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad -
+```
+
+**PowerShell:**
+```powershell
+# SHA-256 хеш файла
+.\cryptocore dgst --algorithm sha256 --input document.pdf
+# Вывод: 5d5b09f6dcb2d53a5fffc60c4ac0d55fb052072fa2fe5d95f011b5d5d5b0b05 document.pdf
+
+# SHA3-256 хеш файла
+.\cryptocore dgst --algorithm sha3-256 --input backup.tar
+# Вывод: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532 backup.tar
+
+# Хеш с выводом в файл
+.\cryptocore dgst --algorithm sha256 --input important.dat --output important.sha256
+
+# Хеширование из stdin
+echo "abc" | .\cryptocore dgst --algorithm sha256 --input -
 ```
 
 ## Аргументы командной строки
+
+### Команда `crypto` (шифрование/дешифрование):
 
 | Аргумент | Описание | Обязательный |
 |----------|-------------|----------|
@@ -178,6 +228,14 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 | `--input` | Путь к входному файлу | Да |
 | `--output` | Путь к выходному файлу (опционально) | Нет |
 | `--iv` | Вектор инициализации для дешифрования (32 hex символа) | Нет |
+
+### Команда `dgst` (вычисление хешей):
+
+| Аргумент | Описание | Обязательный |
+|----------|-------------|----------|
+| `--algorithm` | Алгоритм хеширования (`sha256`, `sha3-256`) | Да |
+| `--input` | Путь к входному файлу (используйте `-` для stdin) | Да |
+| `--output` | Путь к выходному файлу (опционально) | Нет |
 
 ### Формат ключа:
 - 32 шестнадцатеричных символа (16 байт)
@@ -190,10 +248,16 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 - Пример: `aabbccddeeff00112233445566778899`
 - Только для дешифрования в режимах CBC, CFB, OFB, CTR
 
+### Формат вывода хешей:
+- `HASH_VALUE INPUT_FILE_PATH` (совместим с форматом *sum инструментов)
+- Хеш в lowercase hexadecimal
+- Поддержка вывода в файл через `--output`
+
 ### Автоматическое именование выходных файлов:
 Если `--output` не указан, утилита генерирует имена по умолчанию:
-- Шифрование: `{имя_входного_файла}.enc`
-- Дешифрование: `{имя_входного_файла}.dec`
+- **Шифрование**: `{имя_входного_файла}.enc`
+- **Дешифрование**: `{имя_входного_файла}.dec`
+- **Хеширование**: вывод в stdout
 
 ## Режимы шифрования
 
@@ -221,6 +285,20 @@ cryptocore --algorithm aes --mode ecb --operation decrypt \
 - **Потоковый режим**, не требует padding
 - **Требует IV** (используется как начальное значение счетчика)
 - Высокая производительность, возможность параллельной обработки
+
+## Хеш-алгоритмы
+
+### SHA-256
+- **Реализация**: С нуля, соответствует NIST FIPS 180-4
+- **Размер хеша**: 256 бит (64 hex символа)
+- **Структура**: Merkle-Damgård с обработкой 512-битных блоков
+- **Использование**: Проверка целостности данных, цифровые подписи
+
+### SHA3-256
+- **Реализация**: Через библиотеку sha3, соответствует NIST FIPS 202
+- **Размер хеша**: 256 бит (64 hex символа)
+- **Структура**: Sponge construction (губчатая конструкция Keccak)
+- **Использование**: Современная альтернатива SHA-2, устойчивость к атакам
 
 ## Безопасность CSPRNG
 
@@ -280,6 +358,18 @@ chmod +x scripts/test_nist.sh
 ./scripts/test.sh
 ```
 
+### Тестирование хеш-функций:
+```bash
+# Запуск всех тестов включая хеш-функции
+cargo test
+
+# Тестирование только хеш-функций
+cargo test --test hash
+
+# Интеграционные тесты с хешированием
+cargo test --test integration_tests
+```
+
 ### Автоматическое тестирование NIST STS:
 ```bash
 # Генерация тестовых данных и базовое тестирование CSPRNG
@@ -303,6 +393,9 @@ make test-cbc
 make test-cfb
 make test-ofb
 make test-ctr
+
+# Тестирование хеш-функций
+make test-hash
 
 # Тестирование CSPRNG модуля
 make test-csprng
@@ -328,13 +421,17 @@ make test-performance
 echo "Hello CryptoCore Multi-Mode" > test.txt
 
 # Зашифровать с автоматической генерацией ключа
-cryptocore --algorithm aes --mode cbc --operation encrypt --input test.txt --output test.cbc.enc
+cryptocore crypto --algorithm aes --mode cbc --operation encrypt --input test.txt --output test.cbc.enc
 
 # Расшифровать с использованием сгенерированного ключа
-cryptocore --algorithm aes --mode cbc --operation decrypt --key "СГЕНЕРИРОВАННЫЙ_КЛЮЧ" --input test.cbc.enc --output test.cbc.dec
+cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key "СГЕНЕРИРОВАННЫЙ_КЛЮЧ" --input test.cbc.enc --output test.cbc.dec
 
 # Проверить что файлы идентичны
 diff test.txt test.cbc.dec && echo "УСПЕХ: Автоматическая генерация ключа работает"
+
+# Вычислить хеш файла
+cryptocore dgst --algorithm sha256 --input test.txt
+cryptocore dgst --algorithm sha3-256 --input test.txt
 
 # Очистка
 rm test.txt test.cbc.enc test.cbc.dec
@@ -346,15 +443,19 @@ rm test.txt test.cbc.enc test.cbc.dec
 echo "Hello CryptoCore Multi-Mode" > test.txt
 
 # Зашифровать с автоматической генерацией ключа
-.\cryptocore --algorithm aes --mode cbc --operation encrypt --input test.txt --output test.cbc.enc
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt --input test.txt --output test.cbc.enc
 
 # Расшифровать с использованием сгенерированного ключа
-.\cryptocore --algorithm aes --mode cbc --operation decrypt --key "СГЕНЕРИРОВАННЫЙ_КЛЮЧ" --input test.cbc.enc --output test.cbc.dec
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key "СГЕНЕРИРОВАННЫЙ_КЛЮЧ" --input test.cbc.enc --output test.cbc.dec
 
 # Проверить что файлы идентичны
 fc test.txt test.cbc.dec
 
 # Если файлы идентичны, вы увидите: "Сравнение файлов завершено. Различия не обнаружены."
+
+# Вычислить хеш файла
+.\cryptocore dgst --algorithm sha256 --input test.txt
+.\cryptocore dgst --algorithm sha3-256 --input test.txt
 
 # Очистка
 Remove-Item test.txt, test.cbc.enc, test.cbc.dec
@@ -375,6 +476,11 @@ cargo test --test integration_tests
 cargo test --test csprng
 ```
 
+### Тесты хеш-функций:
+```bash
+cargo test --test hash
+```
+
 ## Интероперабельность с OpenSSL
 
 ### Шифрование CryptoCore → Дешифрование OpenSSL:
@@ -382,7 +488,7 @@ cargo test --test csprng
 **Bash/Linux:**
 ```bash
 # Шифруем нашим инструментом
-cryptocore --algorithm aes --mode cbc --operation encrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
   --key 00112233445566778899aabbccddeeff \
   --input file.txt --output file.enc
 
@@ -399,7 +505,7 @@ openssl enc -aes-128-cbc -d -K 00112233445566778899aabbccddeeff \
 **PowerShell:**
 ```powershell
 # Шифруем нашим инструментом
-.\cryptocore --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input file.txt --output file.enc
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input file.txt --output file.enc
 
 # Извлекаем IV и шифротекст с помощью PowerShell
 $content = [System.IO.File]::ReadAllBytes("file.enc")
@@ -426,7 +532,7 @@ openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff \
   -in file.txt -out file.enc
 
 # Дешифруем нашим инструментом
-cryptocore --algorithm aes --mode cbc --operation decrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
   --key 00112233445566778899aabbccddeeff \
   --iv aabbccddeeff00112233445566778899 \
   --input file.enc --output file.dec
@@ -438,7 +544,19 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv aabbccddeeff00112233445566778899 -in file.txt -out file.enc
 
 # Дешифруем нашим инструментом
-.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input file.enc --output file.dec
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input file.enc --output file.dec
+```
+
+### Интероперабельность хеш-функций:
+
+**Bash/Linux:**
+```bash
+# Сравнение с системными утилитами
+cryptocore dgst --algorithm sha256 --input file.txt
+sha256sum file.txt
+
+cryptocore dgst --algorithm sha3-256 --input file.txt
+sha3sum -a 256 file.txt
 ```
 
 ## Технические детали
@@ -449,6 +567,7 @@ openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv aabbccddeeff001
 - **Размер блока**: 16 байт
 - **Размер IV**: 16 байт
 - **Дополнение**: PKCS#7 (для ECB и CBC)
+- **Хеш-алгоритмы**: SHA-256, SHA3-256
 - **Генерация ключей**: Криптографически безопасный ГПСЧ (OpenSSL `rand_bytes()`)
 - **Генерация IV**: Криптографически безопасный генератор (`Csprng::generate_iv()`)
 - **Библиотека**: OpenSSL через Rust crate `openssl`
@@ -461,7 +580,7 @@ cryptocore/
 ├── src/
 │   ├── main.rs              # Точка входа
 │   ├── lib.rs               # Библиотечные компоненты
-│   ├── csprng/              # НОВЫЙ МОДУЛЬ CSPRNG
+│   ├── csprng/              # Модуль CSPRNG
 │   │   └── mod.rs           # Криптографически безопасный ГПСЧ
 │   ├── cli/                 # Интерфейс командной строки
 │   │   ├── mod.rs
@@ -475,12 +594,17 @@ cryptocore/
 │   │       ├── cfb.rs       # CFB режим
 │   │       ├── ofb.rs       # OFB режим
 │   │       └── ctr.rs       # CTR режим
-│   └── file/                # Операции ввода-вывода файлов
-│       ├── mod.rs
-│       └── io.rs            # Функции работы с файлами и IV
+│   ├── file/                # Операции ввода-вывода файлов
+│   │   ├── mod.rs
+│   │   └── io.rs            # Функции работы с файлами и IV
+│   └── hash/                # НОВЫЙ МОДУЛЬ: Хеш-функции
+│       ├── mod.rs           # Интерфейс хеш-алгоритмов
+│       ├── sha256.rs        # Реализация SHA-256 с нуля
+│       └── sha3_256.rs      # Реализация SHA3-256 через библиотеку
 ├── tests/                   # Интеграционные тесты
 │   ├── integration_tests.rs
-│   └── test_csprng.rs       # НОВЫЕ ТЕСТЫ CSPRNG
+│   ├── test_csprng.rs       # Тесты CSPRNG
+│   └── test_hash.rs         # Тесты хеш-функции
 ├── scripts/                 # Скрипты автоматического тестирования
 │   ├── test.ps1             # Полные тесты для PowerShell
 │   ├── test.sh              # Полные тесты для Linux/Mac
@@ -497,7 +621,7 @@ cryptocore/
 
 **Bash/Linux:**
 ```bash
-cryptocore --algorithm aes --mode cbc --operation encrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
   --input document.pdf \
   --output document.pdf.enc
 # Запомните сгенерированный ключ для дешифрования!
@@ -505,20 +629,20 @@ cryptocore --algorithm aes --mode cbc --operation encrypt \
 
 **PowerShell:**
 ```powershell
-.\cryptocore --algorithm aes --mode cbc --operation encrypt `
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt `
   --input document.pdf `
   --output document.pdf.enc
 # Запомните сгенерированный ключ для дешифрования!
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cbc --operation encrypt --input document.pdf --output document.pdf.enc
+.\cryptocore crypto --algorithm aes --mode cbc --operation encrypt --input document.pdf --output document.pdf.enc
 ```
 
 ### Зашифровать в потоковом режиме (без padding):
 
 **Bash/Linux:**
 ```bash
-cryptocore --algorithm aes --mode ctr --operation encrypt \
+cryptocore crypto --algorithm aes --mode ctr --operation encrypt \
   --key 2b7e151628aed2a6abf7158809cf4f3c \
   --input video.mp4 \
   --output video.mp4.enc
@@ -526,20 +650,20 @@ cryptocore --algorithm aes --mode ctr --operation encrypt \
 
 **PowerShell:**
 ```powershell
-.\cryptocore --algorithm aes --mode ctr --operation encrypt `
+.\cryptocore crypto --algorithm aes --mode ctr --operation encrypt `
   --key 2b7e151628aed2a6abf7158809cf4f3c `
   --input video.mp4 `
   --output video.mp4.enc
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode ctr --operation encrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input video.mp4 --output video.mp4.enc
+.\cryptocore crypto --algorithm aes --mode ctr --operation encrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input video.mp4 --output video.mp4.enc
 ```
 
 ### Расшифровать с автоматическим именем выходного файла:
 
 **Bash/Linux:**
 ```bash
-cryptocore --algorithm aes --mode cbc --operation decrypt \
+cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
   --key 2b7e151628aed2a6abf7158809cf4f3c \
   --input document.pdf.enc
 # Создаст: document.pdf.enc.dec
@@ -547,13 +671,44 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 
 **PowerShell:**
 ```powershell
-.\cryptocore --algorithm aes --mode cbc --operation decrypt `
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt `
   --key 2b7e151628aed2a6abf7158809cf4f3c `
   --input document.pdf.enc
 # Создаст: document.pdf.enc.dec
 
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cbc --operation decrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input document.pdf.enc
+.\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input document.pdf.enc
+```
+
+### Проверить целостность файлов с помощью хешей:
+
+**Bash/Linux:**
+```bash
+# Вычислить хеш файла
+cryptocore dgst --algorithm sha256 --input software.iso
+# Вывод: 5d5b09f6dcb2d53a5fffc60c4ac0d55fb052072fa2fe5d95f011b5d5d5b0b05 software.iso
+
+# Сохранить хеш в файл
+cryptocore dgst --algorithm sha256 --input software.iso --output software.sha256
+
+# Проверить целостность позже
+cryptocore dgst --algorithm sha256 --input software.iso
+# Сравнить с содержимым software.sha256
+
+# Использовать SHA3-256 для дополнительной безопасности
+cryptocore dgst --algorithm sha3-256 --input critical_data.db --output checksum.sha3
+```
+
+**PowerShell:**
+```powershell
+# Вычислить хеш файла
+.\cryptocore dgst --algorithm sha256 --input software.iso
+
+# Сохранить хеш в файл
+.\cryptocore dgst --algorithm sha256 --input software.iso --output software.sha256
+
+# Использовать SHA3-256
+.\cryptocore dgst --algorithm sha3-256 --input critical_data.db --output checksum.sha3
 ```
 
 ### Работа с бинарными данными:
@@ -561,33 +716,40 @@ cryptocore --algorithm aes --mode cbc --operation decrypt \
 **Bash/Linux:**
 ```bash
 # Шифрование бинарного файла
-cryptocore --algorithm aes --mode cfb --operation encrypt \
+cryptocore crypto --algorithm aes --mode cfb --operation encrypt \
   --key 000102030405060708090a0b0c0d0e0f \
   --input database.bin --output database.enc
 
 # Дешифрование с указанием IV
-cryptocore --algorithm aes --mode cfb --operation decrypt \
+cryptocore crypto --algorithm aes --mode cfb --operation decrypt \
   --key 000102030405060708090a0b0c0d0e0f \
   --iv 1234567890abcdef1234567890abcdef \
   --input database.enc --output database.dec
+
+# Проверить целостность бинарного файла
+cryptocore dgst --algorithm sha256 --input database.bin
 ```
 
 **PowerShell:**
 ```powershell
 # Шифрование бинарного файла
-.\cryptocore --algorithm aes --mode cfb --operation encrypt `
+.\cryptocore crypto --algorithm aes --mode cfb --operation encrypt `
   --key 000102030405060708090a0b0c0d0e0f `
   --input database.bin --output database.enc
 
 # Дешифрование с указанием IV
-.\cryptocore --algorithm aes --mode cfb --operation decrypt `
+.\cryptocore crypto --algorithm aes --mode cfb --operation decrypt `
   --key 000102030405060708090a0b0c0d0e0f `
   --iv 1234567890abcdef1234567890abcdef `
   --input database.enc --output database.dec
 
+# Проверить целостность бинарного файла
+.\cryptocore dgst --algorithm sha256 --input database.bin
+
 # Или в одну строку:
-.\cryptocore --algorithm aes --mode cfb --operation encrypt --key 000102030405060708090a0b0c0d0e0f --input database.bin --output database.enc
-.\cryptocore --algorithm aes --mode cfb --operation decrypt --key 000102030405060708090a0b0c0d0e0f --iv 1234567890abcdef1234567890abcdef --input database.enc --output database.dec
+.\cryptocore crypto --algorithm aes --mode cfb --operation encrypt --key 000102030405060708090a0b0c0d0e0f --input database.bin --output database.enc
+.\cryptocore crypto --algorithm aes --mode cfb --operation decrypt --key 000102030405060708090a0b0c0d0e0f --iv 1234567890abcdef1234567890abcdef --input database.enc --output database.dec
+.\cryptocore dgst --algorithm sha256 --input database.bin
 ```
 
 ## Обработка ошибок
@@ -601,6 +763,7 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
 - **Несуществующий входной файл**: "Input file does not exist"
 - **Файл слишком короткий для IV**: "File too short to contain IV"
 - **Неверный hex-формат**: "Key must be a valid hexadecimal string"
+- **Неверный алгоритм хеширования**: "Unsupported hash algorithm"
 - **Слабый ключ**: "WARNING: The provided key appears to be weak. Consider using a stronger key."
 
 ## Примечания по безопасности
@@ -612,8 +775,11 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
 - Правильная обработка дополнения PKCS#7 для ECB и CBC режимов
 - Безопасное управление памятью для чувствительных данных
 - Потоковые режимы (CFB, OFB, CTR) не используют padding, сохраняя точный размер данных
+- **SHA-256 реализован с нуля** по стандарту NIST FIPS 180-4
+- **SHA3-256** использует проверенную библиотечную реализацию
 - Проверка слабых ключей с предупреждениями
 - **Проверенное качество CSPRNG**: все статистические тесты пройдены успешно
+- **Проверенные хеш-функции**: проходят NIST тестовые векторы и тест лавинного эффекта
 
 ## Лицензия
 
@@ -640,7 +806,9 @@ cryptocore --algorithm aes --mode cfb --operation decrypt \
    - Либо не указывайте `--iv` (IV будет прочитан из файла)
    - Либо укажите правильный IV через `--iv` (32 hex символа)
 4. **Для шифрования в режимах с IV** - не указывайте `--iv` (генерируется автоматически)
-5. **Убедитесь что входной файл** существует и доступен для чтения
-6. **Проверьте доступное место на диске** для выходных файлов
-7. **В PowerShell используйте `.\` перед cryptocore** - это требование безопасности PowerShell для запуска локальных исполняемых файлов
-8. **При использовании слабых ключей** - обратите внимание на предупреждения
+5. **Для вычисления хешей** используйте команду `dgst` с указанием алгоритма
+6. **Формат вывода хешей** совместим с системными утилитами (*sum)
+7. **Убедитесь что входной файл** существует и доступен для чтения
+8. **Проверьте доступное место на диске** для выходных файлов
+9. **В PowerShell используйте `.\` перед cryptocore** - это требование безопасности PowerShell для запуска локальных исполняемых файлов
+10. **При использовании слабых ключей** - обратите внимание на предупреждения

@@ -136,8 +136,8 @@ fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
 
 #[cfg(test)]
 mod tests {
-    use crate::crypto::BlockMode;
     use super::*;
+    use crate::crypto::BlockMode;
 
     #[test]
     fn test_cbc_round_trip() {
@@ -160,5 +160,26 @@ mod tests {
 
         let unpadded = pkcs7_unpad(&padded, 16).unwrap();
         assert_eq!(data, &unpadded[..]);
+    }
+
+    #[test]
+    fn test_cbc_different_sizes() {
+        let key = "00112233445566778899aabbccddeeff";
+        let iv = vec![0x01; 16];
+        let cbc = Cbc::new(key).unwrap();
+
+        let test_cases = [
+            b"".to_vec(),
+            b"A".to_vec(),
+            b"Short text".to_vec(),
+            b"Medium length text here".to_vec(),
+            b"This is a much longer test message to ensure CBC works with various sizes".to_vec(),
+        ];
+
+        for original in test_cases {
+            let ciphertext = cbc.encrypt(&original, &iv).unwrap();
+            let decrypted = cbc.decrypt(&ciphertext, &iv).unwrap();
+            assert_eq!(original, decrypted);
+        }
     }
 }

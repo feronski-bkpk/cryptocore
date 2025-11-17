@@ -103,8 +103,8 @@ fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
 
 #[cfg(test)]
 mod tests {
-    use crate::BlockMode;
     use super::*;
+    use crate::crypto::BlockMode;
 
     #[test]
     fn test_cfb_round_trip() {

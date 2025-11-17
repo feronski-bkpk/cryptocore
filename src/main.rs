@@ -5,11 +5,13 @@ mod cli;
 mod crypto;
 mod file;
 mod csprng;
+mod hash;
 
-use crate::cli::{Cli, Operation, Mode};
+use crate::cli::parser::{Cli, Command, Operation, Mode};
 use crate::crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb};
 use crate::file::{read_file, write_file, extract_iv_from_file, prepend_iv_to_data};
 use crate::csprng::Csprng;
+use crate::hash::HashType;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -19,10 +21,38 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    // Handle key generation or validation
-    let (key_hex, is_key_generated) = match (&cli.operation, &cli.key) {
+    match &cli.command {
+        Command::Crypto {
+            algorithm: _,
+            mode,
+            operation,
+            key,
+            input,
+            output: _,
+            iv
+        } => {
+            handle_crypto_command(*mode, *operation, key.clone(), input.clone(), iv.clone(), &cli)
+        }
+        Command::Dgst {
+            algorithm,
+            input,
+            output
+        } => {
+            handle_dgst_command(algorithm, input.clone(), output.clone())
+        }
+    }
+}
+
+fn handle_crypto_command(
+    mode: Mode,
+    operation: Operation,
+    key: Option<String>,
+    input: std::path::PathBuf,
+    iv: Option<String>,
+    cli: &Cli
+) -> Result<()> {
+    let (key_hex, is_key_generated) = match (&operation, &key) {
         (Operation::Encrypt, None) => {
-            // Generate random key
             let key_bytes = Csprng::generate_key()?;
             let key_hex = hex::encode(key_bytes);
             println!("[INFO] Generated random key: {}", key_hex);
@@ -39,10 +69,10 @@ fn main() -> Result<()> {
         }
     };
 
-    let output_path = cli.get_output_path();
-    let input_data = read_file(&cli.input)?;
+    let output_path = cli.get_output_path().unwrap();
+    let input_data = read_file(&input)?;
 
-    let output_data = match (cli.operation, cli.mode) {
+    let output_data = match (operation, mode) {
         (Operation::Encrypt, Mode::Ecb) => {
             let ecb = Ecb::new(&key_hex)?;
             ecb.encrypt(&input_data, &[])?
@@ -53,7 +83,6 @@ fn main() -> Result<()> {
         }
 
         (Operation::Encrypt, mode) => {
-            // Generate IV using CSPRNG
             let iv = Csprng::generate_iv()?;
             let ciphertext = encrypt_with_mode(&key_hex, mode, &input_data, &iv)?;
             prepend_iv_to_data(&iv, &ciphertext)
@@ -65,7 +94,7 @@ fn main() -> Result<()> {
                     decrypt_with_mode(&key_hex, mode, &input_data, &[])?
                 }
                 _ => {
-                    if let Some(iv_hex) = &cli.iv {
+                    if let Some(iv_hex) = &iv {
                         let iv_bytes = hex::decode(iv_hex.trim_start_matches('@'))?;
                         let mut iv = [0u8; 16];
                         iv.copy_from_slice(&iv_bytes);
@@ -87,6 +116,38 @@ fn main() -> Result<()> {
 
     println!("Operation completed successfully!");
     println!("Output: {}", output_path.display());
+
+    Ok(())
+}
+
+fn handle_dgst_command(
+    algorithm: &str,
+    input: std::path::PathBuf,
+    output: Option<std::path::PathBuf>
+) -> Result<()> {
+    let hash_type = HashType::from_str(algorithm)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported hash algorithm: {}", algorithm))?;
+
+    let hasher = hash_type.create_hasher();
+    let hash_value = hasher.hash_file(&input)?;
+
+    let input_display = if input.to_str() == Some("-") {
+        "-".to_string()
+    } else {
+        input.display().to_string()
+    };
+
+    let output_line = format!("{}  {}", hash_value, input_display);
+
+    match output {
+        Some(output_path) => {
+            std::fs::write(&output_path, &output_line)?;
+            println!("Hash written to: {}", output_path.display());
+        }
+        None => {
+            println!("{}", output_line);
+        }
+    }
 
     Ok(())
 }

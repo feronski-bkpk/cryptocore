@@ -23,7 +23,7 @@ impl Csprng {
 
     /// Generates a 16-byte IV
     pub fn generate_iv() -> Result<[u8; 16]> {
-        Self::generate_key() // IV тоже 16 байт
+        Self::generate_key()
     }
 
     /// Generates a large amount of random data for statistical testing
@@ -61,7 +61,7 @@ mod tests {
         let key2 = Csprng::generate_key().unwrap();
         assert_eq!(key1.len(), 16);
         assert_eq!(key2.len(), 16);
-        assert_ne!(key1, key2); // Keys should be different
+        assert_ne!(key1, key2);
     }
 
     #[test]
@@ -70,7 +70,7 @@ mod tests {
         let iv2 = Csprng::generate_iv().unwrap();
         assert_eq!(iv1.len(), 16);
         assert_eq!(iv2.len(), 16);
-        assert_ne!(iv1, iv2); // IVs should be different
+        assert_ne!(iv1, iv2);
     }
 
     #[test]

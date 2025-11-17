@@ -78,8 +78,8 @@ fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
 
 #[cfg(test)]
 mod tests {
-    use crate::crypto::BlockMode;
     use super::*;
+    use crate::crypto::BlockMode;
 
     #[test]
     fn test_ctr_round_trip() {
@@ -113,11 +113,11 @@ mod tests {
         let key = "00112233445566778899aabbccddeeff";
         let iv = vec![0x01; 16];
         let ctr = Ctr::new(key).unwrap();
-        
+
         let test_data = [
-            vec![0x41; 15],  
-            vec![0x42; 17], 
-            vec![0x43; 31], 
+            vec![0x41; 15],
+            vec![0x42; 17],
+            vec![0x43; 31],
         ];
 
         for data in test_data {

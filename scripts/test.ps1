@@ -100,7 +100,108 @@ Write-Step "Testing CSPRNG module"
 cargo test --test csprng -- --nocapture
 Write-Status ($LASTEXITCODE -eq 0) "CSPRNG module tests"
 
-# Step 5: Automatic Key Generation Tests
+# Step 5: Hash Function Tests
+Write-Section "Hash Function Tests"
+
+Write-Step "Testing hash module"
+cargo test --test hash -- --nocapture
+Write-Status ($LASTEXITCODE -eq 0) "Hash module tests"
+
+# Test SHA-256 with known vectors
+Write-Step "Testing SHA-256 known vectors"
+$sha256TestFile = Join-Path $SCRIPT_DIR "sha256_test.txt"
+"abc" | Out-File -FilePath $sha256TestFile -Encoding utf8 -NoNewline
+
+$sha256Output = & $CRYPTOCORE_EXE dgst --algorithm sha256 --input $sha256TestFile 2>&1
+$sha256OutputText = $sha256Output -join "`n"
+
+if ($sha256OutputText -match "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c") {
+    Write-Status $true "SHA-256 known vector test"
+    $testResults += "PASSED: Hash - SHA-256 known vector"
+} else {
+    Write-Status $false "SHA-256 known vector test failed"
+    Write-Host "Expected: 1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c" -ForegroundColor Yellow
+    Write-Host "Got: $sha256OutputText" -ForegroundColor Yellow
+    $testResults += "FAILED: Hash - SHA-256 known vector"
+    $allTestsPassed = $false
+}
+
+# Test SHA3-256 with known vectors
+Write-Step "Testing SHA3-256 known vectors"
+$sha3TestFile = Join-Path $SCRIPT_DIR "sha3_test.txt"
+"abc" | Out-File -FilePath $sha3TestFile -Encoding utf8 -NoNewline
+
+$sha3Output = & $CRYPTOCORE_EXE dgst --algorithm sha3-256 --input $sha3TestFile 2>&1
+$sha3OutputText = $sha3Output -join "`n"
+
+if ($sha3OutputText -match "d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1") {
+    Write-Status $true "SHA3-256 known vector test"
+    $testResults += "PASSED: Hash - SHA3-256 known vector"
+} else {
+    Write-Status $false "SHA3-256 known vector test failed"
+    Write-Host "Expected: d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1" -ForegroundColor Yellow
+    Write-Host "Got: $sha3OutputText" -ForegroundColor Yellow
+    $testResults += "FAILED: Hash - SHA3-256 known vector"
+    $allTestsPassed = $false
+}
+
+# Test hash output to file
+Write-Step "Testing hash output to file"
+$hashOutputFile = Join-Path $SCRIPT_DIR "hash_output.txt"
+& $CRYPTOCORE_EXE dgst --algorithm sha256 --input $sha256TestFile --output $hashOutputFile
+
+if ($LASTEXITCODE -eq 0 -and (Test-Path $hashOutputFile)) {
+    $hashContent = Get-Content $hashOutputFile -Raw
+    # В файл пишется только хеш, без имени файла
+    if ($hashContent -match "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c") {
+        Write-Status $true "Hash output to file works"
+        $testResults += "PASSED: Hash - Output to file"
+    } else {
+        Write-Status $false "Hash output to file content mismatch"
+        Write-Host "Expected hash in file: 1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c" -ForegroundColor Yellow
+        Write-Host "Got in file: $hashContent" -ForegroundColor Yellow
+        $testResults += "FAILED: Hash - Output to file"
+        $allTestsPassed = $false
+    }
+} else {
+    Write-Status $false "Hash output to file failed"
+    $testResults += "FAILED: Hash - Output to file"
+    $allTestsPassed = $false
+}
+
+# Test hash with different file types
+Write-Step "Testing hash with different file types"
+$hashAlgorithms = @("sha256", "sha3-256")
+
+foreach ($algorithm in $hashAlgorithms) {
+    foreach ($file in $testFiles.GetEnumerator()) {
+        $filename = $file.Key
+        $filePath = Join-Path $SCRIPT_DIR $filename
+        Write-Host "  Testing $algorithm with $filename..." -NoNewline
+
+        $hashOutput = & $CRYPTOCORE_EXE dgst --algorithm $algorithm --input $filePath 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $hashOutputText = $hashOutput -join "`n"
+            if ($hashOutputText -match "^[0-9a-f]{64}\s+") {
+                Write-Host " Success" -ForegroundColor Green
+                $testResults += "PASSED: Hash - $algorithm with $filename"
+            } else {
+                Write-Host " Invalid format" -ForegroundColor Red
+                $testResults += "FAILED: Hash - $algorithm with $filename (format)"
+                $allTestsPassed = $false
+            }
+        } else {
+            Write-Host " Failed" -ForegroundColor Red
+            $testResults += "FAILED: Hash - $algorithm with $filename"
+            $allTestsPassed = $false
+        }
+    }
+}
+
+# Cleanup hash test files
+Remove-Item $sha256TestFile, $sha3TestFile, $hashOutputFile -ErrorAction SilentlyContinue
+
+# Step 6: Automatic Key Generation Tests
 Write-Section "Automatic Key Generation Tests"
 
 Write-Step "Testing encryption without --key parameter"
@@ -109,7 +210,7 @@ $autoKeyTestFile = Join-Path $SCRIPT_DIR "auto_key_test.txt"
 
 # Capture both stdout and stderr
 $autoKeyProcess = Start-Process -FilePath $CRYPTOCORE_EXE -ArgumentList @(
-    "--algorithm", "aes",
+    "crypto", "--algorithm", "aes",
     "--mode", "cbc",
     "--operation", "encrypt",
     "--input", $autoKeyTestFile,
@@ -118,7 +219,7 @@ $autoKeyProcess = Start-Process -FilePath $CRYPTOCORE_EXE -ArgumentList @(
 $autoKeySuccess = ($autoKeyProcess.ExitCode -eq 0)
 
 # Get the output by running the command again and capturing output
-$autoKeyOutput = & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --input $autoKeyTestFile --output "$autoKeyTestFile.enc" 2>&1
+$autoKeyOutput = & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --input $autoKeyTestFile --output "$autoKeyTestFile.enc" 2>&1
 $autoKeySuccess = ($LASTEXITCODE -eq 0)
 
 if ($autoKeySuccess) {
@@ -131,7 +232,7 @@ if ($autoKeySuccess) {
         Write-Host "Generated key: $generatedKey" -ForegroundColor Green
 
         # Test decryption with generated key
-        & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $generatedKey --input "$autoKeyTestFile.enc" --output "$autoKeyTestFile.dec"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $generatedKey --input "$autoKeyTestFile.enc" --output "$autoKeyTestFile.dec"
         $decryptSuccess = ($LASTEXITCODE -eq 0)
 
         if ($decryptSuccess) {
@@ -166,7 +267,7 @@ if ($autoKeySuccess) {
 
 Remove-Item $autoKeyTestFile, "$autoKeyTestFile.enc", "$autoKeyTestFile.dec" -ErrorAction SilentlyContinue
 
-# Step 6: Weak Key Detection Tests
+# Step 7: Weak Key Detection Tests
 Write-Section "Weak Key Detection Tests"
 
 Write-Step "Testing weak key detection"
@@ -174,7 +275,7 @@ $weakKeyTestFile = Join-Path $SCRIPT_DIR "weak_key_test.txt"
 "Weak key test" | Out-File -FilePath $weakKeyTestFile -Encoding utf8
 
 # Test all zeros key (should show warning but work)
-$weakKeyOutput = & $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "00000000000000000000000000000000" --input $weakKeyTestFile --output "$weakKeyTestFile.enc" 2>&1
+$weakKeyOutput = & $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "00000000000000000000000000000000" --input $weakKeyTestFile --output "$weakKeyTestFile.enc" 2>&1
 $weakKeyOutputText = $weakKeyOutput -join "`n"
 $weakKeyWarning = $weakKeyOutputText -match "WARNING.*weak"
 $weakKeySuccess = ($LASTEXITCODE -eq 0)
@@ -189,7 +290,7 @@ if ($weakKeyWarning -and $weakKeySuccess) {
 }
 
 # Test sequential key (should show warning but work)
-$sequentialKeyOutput = & $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "000102030405060708090a0b0c0d0e0f" --input $weakKeyTestFile --output "$weakKeyTestFile.enc2" 2>&1
+$sequentialKeyOutput = & $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "000102030405060708090a0b0c0d0e0f" --input $weakKeyTestFile --output "$weakKeyTestFile.enc2" 2>&1
 $sequentialKeyOutputText = $sequentialKeyOutput -join "`n"
 $sequentialKeyWarning = $sequentialKeyOutputText -match "WARNING.*weak"
 $sequentialKeySuccess = ($LASTEXITCODE -eq 0)
@@ -205,7 +306,7 @@ if ($sequentialKeyWarning -and $sequentialKeySuccess) {
 
 Remove-Item $weakKeyTestFile, "$weakKeyTestFile.enc", "$weakKeyTestFile.enc2" -ErrorAction SilentlyContinue
 
-# Step 7: Test all encryption modes comprehensively
+# Step 8: Test all encryption modes comprehensively
 Write-Section "Testing All Encryption Modes"
 
 $KEY = "00112233445566778899aabbccddeeff"
@@ -229,7 +330,7 @@ foreach ($mode in $modes) {
 
         # Build encryption command
         $encryptArgs = @(
-            "--algorithm", "aes",
+            "crypto", "--algorithm", "aes",
             "--mode", $mode,
             "--operation", "encrypt",
             "--key", $KEY,
@@ -239,7 +340,7 @@ foreach ($mode in $modes) {
 
         # Build decryption command
         $decryptArgs = @(
-            "--algorithm", "aes",
+            "crypto", "--algorithm", "aes",
             "--mode", $mode,
             "--operation", "decrypt",
             "--key", $KEY,
@@ -326,7 +427,7 @@ foreach ($mode in $modes) {
         $decryptedFile = Join-Path $SCRIPT_DIR "$binaryFile.$mode.dec"
 
         $encryptArgs = @(
-            "--algorithm", "aes",
+            "crypto", "--algorithm", "aes",
             "--mode", $mode,
             "--operation", "encrypt",
             "--key", $KEY,
@@ -335,7 +436,7 @@ foreach ($mode in $modes) {
         )
 
         $decryptArgs = @(
-            "--algorithm", "aes",
+            "crypto", "--algorithm", "aes",
             "--mode", $mode,
             "--operation", "decrypt",
             "--key", $KEY,
@@ -390,7 +491,7 @@ foreach ($mode in $modes) {
     }
 }
 
-# Step 8: Advanced IV handling tests
+# Step 9: Advanced IV handling tests
 Write-Section "Testing IV Handling"
 
 # Test IV provided for decryption
@@ -401,7 +502,7 @@ $ivTestFile = Join-Path $SCRIPT_DIR "iv_test.txt"
 $ivEncryptedFile = Join-Path $SCRIPT_DIR "iv_encrypted.bin"
 
 # Encrypt with auto IV
-& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --input $ivTestFile --output $ivEncryptedFile
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --input $ivTestFile --output $ivEncryptedFile
 
 if ($LASTEXITCODE -eq 0) {
     # Extract IV from encrypted file
@@ -418,7 +519,7 @@ if ($LASTEXITCODE -eq 0) {
 
     # Decrypt with provided IV
     $ivDecryptedFile = Join-Path $SCRIPT_DIR "iv_decrypted.txt"
-    & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $ivHex --input $ciphertextFile --output $ivDecryptedFile
+    & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $ivHex --input $ciphertextFile --output $ivDecryptedFile
 
     if ($LASTEXITCODE -eq 0) {
         $original = Get-Content $ivTestFile -Raw
@@ -445,13 +546,13 @@ if ($LASTEXITCODE -eq 0) {
 
 Remove-Item $ivTestFile, $ivEncryptedFile, $ciphertextFile, $ivDecryptedFile -ErrorAction SilentlyContinue
 
-# Step 9: Validation and error handling tests
+# Step 10: Validation and error handling tests
 Write-Section "Validation and Error Handling"
 
 # Test invalid key
 Write-Step "Testing invalid key rejection"
 $shortFilePath = Join-Path $SCRIPT_DIR "short.txt"
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "invalid" --input $shortFilePath --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "invalid" --input $shortFilePath --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject invalid key"
     $testResults += "FAILED: Validation - Invalid key accepted"
@@ -463,7 +564,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # Test wrong key length
 Write-Step "Testing wrong key length"
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key "001122" --input $shortFilePath --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "001122" --input $shortFilePath --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject wrong key length"
     $testResults += "FAILED: Validation - Wrong key length accepted"
@@ -475,7 +576,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # Test nonexistent file
 Write-Step "Testing nonexistent file rejection"
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key $KEY --input "nonexistent_file_12345.txt" --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key $KEY --input "nonexistent_file_12345.txt" --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject nonexistent file"
     $testResults += "FAILED: Validation - Nonexistent file accepted"
@@ -487,7 +588,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # Test IV provided during encryption (should fail)
 Write-Step "Testing IV rejection during encryption"
-& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --iv "000102030405060708090A0B0C0D0E0F" --input $shortFilePath --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --iv "000102030405060708090A0B0C0D0E0F" --input $shortFilePath --output "test.enc" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should reject IV during encryption"
     $testResults += "FAILED: Validation - IV accepted during encryption"
@@ -501,7 +602,7 @@ if ($LASTEXITCODE -eq 0) {
 Write-Step "Testing missing IV detection"
 $shortCipherFile = Join-Path $SCRIPT_DIR "short_cipher.bin"
 "test" | Out-File -FilePath $shortCipherFile -Encoding utf8
-& $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --input $shortCipherFile --output "test.dec" 2>$null
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --input $shortCipherFile --output "test.dec" 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Status $false "Should detect missing IV"
     $testResults += "FAILED: Validation - Missing IV not detected"
@@ -512,7 +613,19 @@ if ($LASTEXITCODE -eq 0) {
 }
 Remove-Item $shortCipherFile -ErrorAction SilentlyContinue
 
-# Step 10: File handling tests
+# Test invalid hash algorithm
+Write-Step "Testing invalid hash algorithm rejection"
+& $CRYPTOCORE_EXE dgst --algorithm "invalid_hash" --input $shortFilePath 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Status $false "Should reject invalid hash algorithm"
+    $testResults += "FAILED: Validation - Invalid hash algorithm accepted"
+    $allTestsPassed = $false
+} else {
+    Write-Status $true "Invalid hash algorithm rejected"
+    $testResults += "PASSED: Validation - Invalid hash algorithm rejected"
+}
+
+# Step 11: File handling tests
 Write-Section "File Handling Tests"
 
 # Test automatic output naming
@@ -520,7 +633,7 @@ Write-Step "Testing automatic output naming"
 $autoTestFile = Join-Path $SCRIPT_DIR "auto_test.txt"
 "Auto name test" | Out-File -FilePath $autoTestFile -Encoding utf8
 
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation encrypt --key $KEY --input $autoTestFile
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key $KEY --input $autoTestFile
 if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc")) {
     Write-Status $true "Automatic encryption naming works"
     $testResults += "PASSED: File handling - Auto encryption naming"
@@ -530,7 +643,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc")) {
     $allTestsPassed = $false
 }
 
-& $CRYPTOCORE_EXE --algorithm aes --mode ecb --operation decrypt --key $KEY --input "$autoTestFile.enc"
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation decrypt --key $KEY --input "$autoTestFile.enc"
 if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc.dec")) {
     Write-Status $true "Automatic decryption naming works"
     $testResults += "PASSED: File handling - Auto decryption naming"
@@ -542,7 +655,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc.dec")) {
 
 Remove-Item $autoTestFile, "$autoTestFile.enc", "$autoTestFile.enc.dec" -ErrorAction SilentlyContinue
 
-# Step 11: OpenSSL interoperability tests
+# Step 12: OpenSSL interoperability tests
 Write-Section "OpenSSL Interoperability Tests"
 
 if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
@@ -556,7 +669,7 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
         $ourEncryptedFile = Join-Path $SCRIPT_DIR "our_encrypted.bin"
 
         # Encrypt with our tool
-        & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation encrypt --key $KEY --input $opensslTest1File --output $ourEncryptedFile
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --input $opensslTest1File --output $ourEncryptedFile
 
         if ($LASTEXITCODE -eq 0) {
             # Extract IV and ciphertext
@@ -612,7 +725,7 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
         if ($LASTEXITCODE -eq 0) {
             # Decrypt with our tool
             $ourDecryptedFile = Join-Path $SCRIPT_DIR "our_decrypted.txt"
-            & $CRYPTOCORE_EXE --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $TEST_IV --input $opensslEncryptedFile --output $ourDecryptedFile
+            & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $TEST_IV --input $opensslEncryptedFile --output $ourDecryptedFile
 
             if ($LASTEXITCODE -eq 0) {
                 $original = Get-Content $opensslTest2File -Raw
@@ -650,7 +763,7 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
     $testResults += "SKIPPED: OpenSSL interoperability"
 }
 
-# Step 12: Performance and stress tests
+# Step 13: Performance and stress tests
 Write-Section "Performance and Stress Tests"
 
 Write-Step "Testing with larger files"
@@ -670,10 +783,10 @@ try {
             $largeEncryptedFile = Join-Path $SCRIPT_DIR "large_encrypted.bin"
             $largeDecryptedFile = Join-Path $SCRIPT_DIR "large_decrypted.bin"
 
-            & $CRYPTOCORE_EXE --algorithm aes --mode $mode --operation encrypt --key $KEY --input $largeTestFile --output $largeEncryptedFile
+            & $CRYPTOCORE_EXE crypto --algorithm aes --mode $mode --operation encrypt --key $KEY --input $largeTestFile --output $largeEncryptedFile
             $encryptSuccess = ($LASTEXITCODE -eq 0)
 
-            & $CRYPTOCORE_EXE --algorithm aes --mode $mode --operation decrypt --key $KEY --input $largeEncryptedFile --output $largeDecryptedFile
+            & $CRYPTOCORE_EXE crypto --algorithm aes --mode $mode --operation decrypt --key $KEY --input $largeEncryptedFile --output $largeDecryptedFile
             $decryptSuccess = ($LASTEXITCODE -eq 0)
 
             if ($encryptSuccess -and $decryptSuccess) {
@@ -731,7 +844,14 @@ try {
     $testResults += "SKIPPED: Performance - Large file tests"
 }
 
-# Step 13: Cleanup
+# Step 14: Integration tests
+Write-Section "Integration Tests"
+
+Write-Step "Running integration tests"
+cargo test --test integration_tests -- --nocapture
+Write-Status ($LASTEXITCODE -eq 0) "Integration tests"
+
+# Step 15: Cleanup
 Write-Section "Cleaning Up"
 
 foreach ($file in $testFiles.GetEnumerator()) {
@@ -740,7 +860,7 @@ foreach ($file in $testFiles.GetEnumerator()) {
 }
 Remove-Item (Join-Path $SCRIPT_DIR "binary_16.bin"), (Join-Path $SCRIPT_DIR "binary_with_nulls.bin"), (Join-Path $SCRIPT_DIR "random_1k.bin") -ErrorAction SilentlyContinue
 
-# Step 14: Results summary
+# Step 16: Results summary
 Write-Section "Test Results Summary"
 
 $passedCount = 0
@@ -772,9 +892,10 @@ Write-Host ""
 
 if ($allTestsPassed) {
     Write-Host "ALL TESTS PASSED! CryptoCore is fully functional!" -ForegroundColor Green
-    Write-Host "All requirements from M3 document are satisfied" -ForegroundColor Green
+    Write-Host "All requirements from M4 document are satisfied" -ForegroundColor Green
     Write-Host "CSPRNG module working with automatic key generation" -ForegroundColor Green
     Write-Host "All 5 encryption modes working: ECB, CBC, CFB, OFB, CTR" -ForegroundColor Green
+    Write-Host "Hash functions SHA-256 and SHA3-256 working correctly" -ForegroundColor Green
     Write-Host "Comprehensive testing completed successfully" -ForegroundColor Green
     Write-Host "File handling, validation, and interoperability verified" -ForegroundColor Green
 } else {

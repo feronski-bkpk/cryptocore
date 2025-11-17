@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::Path;
 use anyhow::{Result, anyhow};
-// Убрали использование Csprng, так как generate_iv больше не используется здесь
 
 const IV_SIZE: usize = 16;
 
@@ -23,7 +22,6 @@ pub fn write_file(path: &Path, data: &[u8]) -> Result<()> {
     })
 }
 
-// Убрали функцию generate_iv, так как она теперь в csprng модуле
 
 pub fn extract_iv_from_file(data: &[u8]) -> Result<([u8; IV_SIZE], &[u8])> {
     if data.len() < IV_SIZE {
