@@ -1,6 +1,6 @@
 [package]
 name = "cryptocore"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Command-line utility for file encryption and decryption using AES-128 in various modes with secure key generation"
 authors = ["feronski.bkpk@gmail.com"]
@@ -41,3 +41,7 @@ path = "tests/test_csprng.rs"
 [[test]]
 name = "hash"
 path = "tests/test_hash.rs"
+
+[[test]]
+name = "hmac"
+path = "tests/test_hmac.rs"

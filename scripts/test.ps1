@@ -1,6 +1,6 @@
-# test.ps1 - Complete Automated Testing for Windows PowerShell
+# test.ps1 - Complete Automated Testing for Windows PowerShell (Updated for HMAC)
 
-Write-Host "Starting CryptoCore Complete Automated Tests..." -ForegroundColor Cyan
+Write-Host "Starting CryptoCore Complete Automated Tests (v0.5.0 with HMAC)..." -ForegroundColor Cyan
 
 # Colors and formatting
 function Write-Step { Write-Host ">>> $($args[0])" -ForegroundColor Blue }
@@ -200,6 +200,167 @@ foreach ($algorithm in $hashAlgorithms) {
 
 # Cleanup hash test files
 Remove-Item $sha256TestFile, $sha3TestFile, $hashOutputFile -ErrorAction SilentlyContinue
+
+# ============================================================================
+# NEW: HMAC FUNCTIONALITY TESTS (Sprint 5)
+# ============================================================================
+Write-Section "HMAC Functionality Tests (Sprint 5)"
+
+Write-Step "Testing HMAC module"
+cargo test --test hmac -- --nocapture
+Write-Status ($LASTEXITCODE -eq 0) "HMAC module tests"
+
+# Test HMAC with RFC 4231 test vectors
+Write-Step "Testing HMAC with RFC 4231 test vectors"
+
+# Test Case 1: Key = 20 bytes of 0x0b, Data = "Hi There"
+Write-Host "  Testing RFC 4231 Test Case 1..." -NoNewline
+$hmacTest1File = Join-Path $SCRIPT_DIR "hmac_test1.txt"
+"Hi There" | Out-File -FilePath $hmacTest1File -Encoding utf8 -NoNewline
+
+$hmacOutput1 = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b" --input $hmacTest1File 2>&1
+$hmacOutput1Text = $hmacOutput1 -join "`n"
+
+if ($hmacOutput1Text -match "74c69388287ca06248e6be230daffe807d4c6fc0e45da0325f2fae0d1a4ee3b8") {
+    Write-Host " Success" -ForegroundColor Green
+    $testResults += "PASSED: HMAC - RFC 4231 Test Case 1"
+} else {
+    Write-Host " Failed" -ForegroundColor Red
+    Write-Host "Expected: 74c69388287ca06248e6be230daffe807d4c6fc0e45da0325f2fae0d1a4ee3b8" -ForegroundColor Yellow
+    Write-Host "Got: $hmacOutput1Text" -ForegroundColor Yellow
+    $testResults += "FAILED: HMAC - RFC 4231 Test Case 1"
+    $allTestsPassed = $false
+}
+
+# Test Case 2: Key = "Jefe", Data = "what do ya want for nothing?"
+Write-Host "  Testing RFC 4231 Test Case 2..." -NoNewline
+$hmacTest2File = Join-Path $SCRIPT_DIR "hmac_test2.txt"
+"what do ya want for nothing?" | Out-File -FilePath $hmacTest2File -Encoding utf8 -NoNewline
+
+$hmacOutput2 = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "4a656665" --input $hmacTest2File 2>&1
+$hmacOutput2Text = $hmacOutput2 -join "`n"
+
+if ($hmacOutput2Text -match "bbda9901e08476911958eb7d35b1afef014a1576bf8b2c6f85cc9514aed1d967") {
+    Write-Host " Success" -ForegroundColor Green
+    $testResults += "PASSED: HMAC - RFC 4231 Test Case 2"
+} else {
+    Write-Host " Failed" -ForegroundColor Red
+    Write-Host "Expected: bbda9901e08476911958eb7d35b1afef014a1576bf8b2c6f85cc9514aed1d967" -ForegroundColor Yellow
+    Write-Host "Got: $hmacOutput2Text" -ForegroundColor Yellow
+    $testResults += "FAILED: HMAC - RFC 4231 Test Case 2"
+    $allTestsPassed = $false
+}
+
+# Test HMAC with different key sizes
+Write-Step "Testing HMAC with various key sizes"
+
+# Short key (16 bytes)
+Write-Host "  Testing short key (16 bytes)..." -NoNewline
+$shortKeyOutput = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $hmacTest1File 2>&1
+if ($LASTEXITCODE -eq 0 -and ($shortKeyOutput -join "`n") -match "^[0-9a-f]{64}\s+") {
+    Write-Host " Success" -ForegroundColor Green
+    $testResults += "PASSED: HMAC - Short key (16 bytes)"
+} else {
+    Write-Host " Failed" -ForegroundColor Red
+    $testResults += "FAILED: HMAC - Short key (16 bytes)"
+    $allTestsPassed = $false
+}
+
+# Long key (100 bytes)
+Write-Host "  Testing long key (100 bytes)..." -NoNewline
+$longKey = "42" * 100  # 100 bytes in hex
+$longKeyOutput = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key $longKey --input $hmacTest1File 2>&1
+if ($LASTEXITCODE -eq 0 -and ($longKeyOutput -join "`n") -match "^[0-9a-f]{64}\s+") {
+    Write-Host " Success" -ForegroundColor Green
+    $testResults += "PASSED: HMAC - Long key (100 bytes)"
+} else {
+    Write-Host " Failed" -ForegroundColor Red
+    $testResults += "FAILED: HMAC - Long key (100 bytes)"
+    $allTestsPassed = $false
+}
+
+# Test HMAC verification functionality
+Write-Step "Testing HMAC verification"
+
+# Generate HMAC and save to file
+$hmacValueFile = Join-Path $SCRIPT_DIR "test_hmac_value.txt"
+& $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $hmacTest1File --output $hmacValueFile
+
+if ($LASTEXITCODE -eq 0 -and (Test-Path $hmacValueFile)) {
+    # Test successful verification
+    Write-Host "  Testing successful verification..." -NoNewline
+    $verifySuccess = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $hmacTest1File --verify $hmacValueFile 2>&1
+    if ($LASTEXITCODE -eq 0 -and ($verifySuccess -join "`n") -match "HMAC verification successful") {
+        Write-Host " Success" -ForegroundColor Green
+        $testResults += "PASSED: HMAC - Verification successful"
+    } else {
+        Write-Host " Failed" -ForegroundColor Red
+        $testResults += "FAILED: HMAC - Verification successful"
+        $allTestsPassed = $false
+    }
+
+    # Test failed verification (tampered file)
+    Write-Host "  Testing tamper detection..." -NoNewline
+    $tamperedFile = Join-Path $SCRIPT_DIR "tampered.txt"
+    "Hi There (tampered)" | Out-File -FilePath $tamperedFile -Encoding utf8 -NoNewline
+
+    $verifyFailed = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $tamperedFile --verify $hmacValueFile 2>&1
+    if ($LASTEXITCODE -ne 0 -and ($verifyFailed -join "`n") -match "HMAC verification failed") {
+        Write-Host " Success" -ForegroundColor Green
+        $testResults += "PASSED: HMAC - Tamper detection"
+    } else {
+        Write-Host " Failed" -ForegroundColor Red
+        $testResults += "FAILED: HMAC - Tamper detection"
+        $allTestsPassed = $false
+    }
+
+    # Test failed verification (wrong key)
+    Write-Host "  Testing wrong key detection..." -NoNewline
+    $wrongKeyVerify = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "ffeeddccbbaa99887766554433221100" --input $hmacTest1File --verify $hmacValueFile 2>&1
+    if ($LASTEXITCODE -ne 0 -and ($wrongKeyVerify -join "`n") -match "HMAC verification failed") {
+        Write-Host " Success" -ForegroundColor Green
+        $testResults += "PASSED: HMAC - Wrong key detection"
+    } else {
+        Write-Host " Failed" -ForegroundColor Red
+        $testResults += "FAILED: HMAC - Wrong key detection"
+        $allTestsPassed = $false
+    }
+
+    Remove-Item $tamperedFile -ErrorAction SilentlyContinue
+} else {
+    Write-Status $false "HMAC generation for verification test failed"
+    $testResults += "FAILED: HMAC - Verification setup"
+    $allTestsPassed = $false
+}
+
+# Test HMAC with empty file
+Write-Step "Testing HMAC with empty file"
+$emptyFile = Join-Path $SCRIPT_DIR "empty.txt"
+$emptyHmac = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $emptyFile 2>&1
+if ($LASTEXITCODE -eq 0 -and ($emptyHmac -join "`n") -match "^[0-9a-f]{64}\s+") {
+    Write-Status $true "HMAC with empty file"
+    $testResults += "PASSED: HMAC - Empty file"
+} else {
+    Write-Status $false "HMAC with empty file failed"
+    $testResults += "FAILED: HMAC - Empty file"
+    $allTestsPassed = $false
+}
+
+# Test HMAC output format
+Write-Step "Testing HMAC output format"
+$hmacFormatTest = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "001122" --input $hmacTest1File 2>&1
+$hmacFormatText = $hmacFormatTest -join "`n"
+if ($hmacFormatText -match "^([0-9a-f]{64})\s+([^\s]+)$") {
+    Write-Status $true "HMAC output format correct"
+    $testResults += "PASSED: HMAC - Output format"
+} else {
+    Write-Status $false "HMAC output format incorrect"
+    $testResults += "FAILED: HMAC - Output format"
+    $allTestsPassed = $false
+}
+
+# Cleanup HMAC test files
+Remove-Item $hmacTest1File, $hmacTest2File, $hmacValueFile -ErrorAction SilentlyContinue
 
 # Step 6: Automatic Key Generation Tests
 Write-Section "Automatic Key Generation Tests"
@@ -625,6 +786,31 @@ if ($LASTEXITCODE -eq 0) {
     $testResults += "PASSED: Validation - Invalid hash algorithm rejected"
 }
 
+# NEW: Test HMAC validation
+Write-Step "Testing HMAC validation"
+
+# Test HMAC without key
+& $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --input $shortFilePath 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Status $false "Should reject HMAC without key"
+    $testResults += "FAILED: HMAC Validation - No key accepted"
+    $allTestsPassed = $false
+} else {
+    Write-Status $true "HMAC without key rejected"
+    $testResults += "PASSED: HMAC Validation - No key rejected"
+}
+
+# Test HMAC with key but no --hmac flag
+& $CRYPTOCORE_EXE dgst --algorithm sha256 --key "001122" --input $shortFilePath 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Status $false "Should reject key without --hmac flag"
+    $testResults += "FAILED: HMAC Validation - Key without --hmac accepted"
+    $allTestsPassed = $false
+} else {
+    Write-Status $true "Key without --hmac flag rejected"
+    $testResults += "PASSED: HMAC Validation - Key without --hmac rejected"
+}
+
 # Step 11: File handling tests
 Write-Section "File Handling Tests"
 
@@ -892,7 +1078,10 @@ Write-Host ""
 
 if ($allTestsPassed) {
     Write-Host "ALL TESTS PASSED! CryptoCore is fully functional!" -ForegroundColor Green
-    Write-Host "All requirements from M4 document are satisfied" -ForegroundColor Green
+    Write-Host "All requirements from M5 document are satisfied" -ForegroundColor Green
+    Write-Host "HMAC functionality implemented and tested" -ForegroundColor Green
+    Write-Host "RFC 4231 test vectors verified" -ForegroundColor Green
+    Write-Host "HMAC verification with --verify flag working" -ForegroundColor Green
     Write-Host "CSPRNG module working with automatic key generation" -ForegroundColor Green
     Write-Host "All 5 encryption modes working: ECB, CBC, CFB, OFB, CTR" -ForegroundColor Green
     Write-Host "Hash functions SHA-256 and SHA3-256 working correctly" -ForegroundColor Green

@@ -6,12 +6,14 @@ mod crypto;
 mod file;
 mod csprng;
 mod hash;
+mod mac;
 
 use crate::cli::parser::{Cli, Command, Operation, Mode};
 use crate::crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb};
 use crate::file::{read_file, write_file, extract_iv_from_file, prepend_iv_to_data};
 use crate::csprng::Csprng;
 use crate::hash::HashType;
+use crate::mac::HMAC;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -36,9 +38,12 @@ fn main() -> Result<()> {
         Command::Dgst {
             algorithm,
             input,
-            output
+            output,
+            hmac,
+            key,
+            verify
         } => {
-            handle_dgst_command(algorithm, input.clone(), output.clone())
+            handle_dgst_command(algorithm, input.clone(), output.clone(), *hmac, key.clone(), verify.clone())
         }
     }
 }
@@ -123,13 +128,55 @@ fn handle_crypto_command(
 fn handle_dgst_command(
     algorithm: &str,
     input: std::path::PathBuf,
-    output: Option<std::path::PathBuf>
+    output: Option<std::path::PathBuf>,
+    hmac: bool,
+    key: Option<String>,
+    verify: Option<std::path::PathBuf>
 ) -> Result<()> {
     let hash_type = HashType::from_str(algorithm)
         .ok_or_else(|| anyhow::anyhow!("Unsupported hash algorithm: {}", algorithm))?;
 
-    let hasher = hash_type.create_hasher();
-    let hash_value = hasher.hash_file(&input)?;
+    if hmac {
+        let key_bytes = hex::decode(key.unwrap().trim_start_matches('@'))?;
+        let hmac = HMAC::new(&key_bytes, hash_type);
+
+        if let Some(verify_path) = verify {
+            verify_hmac(&hmac, &input, &verify_path)?
+        } else {
+            generate_hmac(&hmac, &input, output)?
+        }
+    } else {
+        let hasher = hash_type.create_hasher();
+        let hash_value = hasher.hash_file(&input)?;
+
+        let input_display = if input.to_str() == Some("-") {
+            "-".to_string()
+        } else {
+            input.display().to_string()
+        };
+
+        let output_line = format!("{}  {}", hash_value, input_display);
+
+        match output {
+            Some(output_path) => {
+                std::fs::write(&output_path, &output_line)?;
+                println!("Hash written to: {}", output_path.display());
+            }
+            None => {
+                println!("{}", output_line);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn generate_hmac(
+    hmac: &HMAC,
+    input: &std::path::Path,
+    output: Option<std::path::PathBuf>
+) -> Result<()> {
+    let hmac_value = hmac.compute_file(input)?;
 
     let input_display = if input.to_str() == Some("-") {
         "-".to_string()
@@ -137,12 +184,12 @@ fn handle_dgst_command(
         input.display().to_string()
     };
 
-    let output_line = format!("{}  {}", hash_value, input_display);
+    let output_line = format!("{}  {}", hmac_value, input_display);
 
     match output {
         Some(output_path) => {
             std::fs::write(&output_path, &output_line)?;
-            println!("Hash written to: {}", output_path.display());
+            println!("HMAC written to: {}", output_path.display());
         }
         None => {
             println!("{}", output_line);
@@ -150,6 +197,45 @@ fn handle_dgst_command(
     }
 
     Ok(())
+}
+
+fn verify_hmac(
+    hmac: &HMAC,
+    input: &std::path::Path,
+    verify_path: &std::path::Path
+) -> Result<()> {
+    let computed_hmac = hmac.compute_file(input)?;
+
+    let expected_content = std::fs::read_to_string(verify_path)?;
+    let expected_hmac = parse_hmac_file(&expected_content, input)
+        .ok_or_else(|| anyhow::anyhow!("Invalid HMAC file format"))?;
+
+    if computed_hmac == expected_hmac {
+        println!("[OK] HMAC verification successful");
+        std::process::exit(0);
+    } else {
+        eprintln!("[ERROR] HMAC verification failed");
+        eprintln!("Expected: {}", expected_hmac);
+        eprintln!("Computed: {}", computed_hmac);
+        std::process::exit(1);
+    }
+}
+
+fn parse_hmac_file(file_content: &str, _input_file: &std::path::Path) -> Option<String> {
+    for line in file_content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        for part in parts {
+            if part.len() == 64 && part.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(part.to_lowercase());
+            }
+        }
+    }
+    None
 }
 
 fn encrypt_with_mode(key: &str, mode: Mode, plaintext: &[u8], iv: &[u8]) -> Result<Vec<u8>> {

@@ -100,16 +100,37 @@ pub enum Command {
             long_help = "Path where the hash output will be written. If not provided, output goes to stdout."
         )]
         output: Option<PathBuf>,
+
+        #[arg(
+            long,
+            help = "Enable HMAC mode",
+            long_help = "Enables HMAC (Hash-based Message Authentication Code) mode. Requires --key."
+        )]
+        hmac: bool,
+
+        #[arg(
+            long,
+            help = "Key for HMAC as hexadecimal string",
+            long_help = "Key for HMAC provided as hexadecimal string. Can be of arbitrary length. Required when --hmac is specified."
+        )]
+        key: Option<String>,
+
+        #[arg(
+            long,
+            help = "Verify HMAC against expected value from file",
+            long_help = "File containing expected HMAC value for verification. Format: HMAC_VALUE FILENAME"
+        )]
+        verify: Option<PathBuf>,
     },
 }
 
 #[derive(Parser, Debug)]
 #[command(
     name = "cryptocore",
-    version = "0.4.0",
-    about = "CryptoCore - Encryption/decryption and hashing tool",
+    version = "0.5.0",
+    about = "CryptoCore - Encryption/decryption, hashing and HMAC tool",
     long_about = r#"
-CryptoCore: A command-line tool for AES-128 encryption/decryption and hash computation.
+CryptoCore: A command-line tool for AES-128 encryption/decryption, hash computation and HMAC.
 
 Encryption/Decryption:
   Supported modes: ECB, CBC, CFB, OFB, CTR
@@ -119,6 +140,10 @@ Hashing:
   Supported algorithms: SHA-256, SHA3-256
   Output format: HASH_VALUE INPUT_FILE_PATH (compatible with *sum tools)
 
+HMAC:
+  New in v0.5.0: HMAC-SHA256 support with --hmac and --key flags
+  Verification support with --verify flag
+
 Examples:
   Encryption with automatic key generation:
     cryptocore crypto --algorithm aes --mode cbc --operation encrypt --input plain.txt --output cipher.bin
@@ -126,8 +151,11 @@ Examples:
   Compute SHA-256 hash:
     cryptocore dgst --algorithm sha256 --input document.pdf
 
-  Compute SHA3-256 hash with output to file:
-    cryptocore dgst --algorithm sha3-256 --input backup.tar --output backup.sha3
+  Compute HMAC-SHA256:
+    cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input message.txt
+
+  Verify HMAC:
+    cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input message.txt --verify expected_hmac.txt
 "#
 )]
 pub struct Cli {
@@ -147,7 +175,6 @@ impl Cli {
                 output: _,
                 iv
             } => {
-                // Validate key (if provided)
                 if let Some(key) = key {
                     let key_str = key.trim_start_matches('@');
                     if key_str.len() != 32 {
@@ -158,7 +185,6 @@ impl Cli {
                         return Err("Key must be a valid hexadecimal string".to_string());
                     }
 
-                    // Check for weak keys and warn (but don't fail)
                     if Self::is_weak_key(key_str) {
                         eprintln!("[WARNING] The provided key appears to be weak. Consider using a stronger key.");
                     }
@@ -166,7 +192,6 @@ impl Cli {
                     return Err("Key is required for decryption".to_string());
                 }
 
-                // Validate IV (if provided)
                 if let Some(iv) = iv {
                     let iv_str = iv.trim_start_matches('@');
                     if iv_str.len() != 32 {
@@ -182,20 +207,50 @@ impl Cli {
                     }
                 }
 
-                // Validate input file exists
                 if !input.exists() && input.to_str() != Some("-") {
                     return Err(format!("Input file does not exist: {}", input.display()));
                 }
             }
-            Command::Dgst { algorithm, input, output: _ } => {
-                // Validate hash algorithm
+            Command::Dgst {
+                algorithm,
+                input,
+                output: _,
+                hmac,
+                key,
+                verify
+            } => {
                 if crate::hash::HashType::from_str(algorithm).is_none() {
                     return Err(format!("Unsupported hash algorithm: {}. Supported: sha256, sha3-256", algorithm));
                 }
 
-                // Validate input file exists (unless it's stdin)
+                if *hmac {
+                    if key.is_none() {
+                        return Err("Key is required when --hmac is specified".to_string());
+                    }
+
+                    if let Some(key_hex) = key {
+                        let key_str = key_hex.trim_start_matches('@');
+                        if hex::decode(key_str).is_err() {
+                            return Err("HMAC key must be a valid hexadecimal string".to_string());
+                        }
+                    }
+                } else {
+                    if key.is_some() {
+                        return Err("Key should only be provided with --hmac flag".to_string());
+                    }
+                    if verify.is_some() {
+                        return Err("--verify should only be used with --hmac flag".to_string());
+                    }
+                }
+
                 if !input.exists() && input.to_str() != Some("-") {
                     return Err(format!("Input file does not exist: {}", input.display()));
+                }
+
+                if let Some(verify_path) = verify {
+                    if !verify_path.exists() {
+                        return Err(format!("Verify file does not exist: {}", verify_path.display()));
+                    }
                 }
             }
         }
@@ -224,21 +279,17 @@ impl Cli {
     pub fn is_weak_key(key_hex: &str) -> bool {
         let key_str = key_hex.trim_start_matches('@');
         if let Ok(key_bytes) = hex::decode(key_str) {
-            // Check for all zeros
             if key_bytes.iter().all(|&b| b == 0) {
                 return true;
             }
 
-            // Check for all same bytes
             if key_bytes.windows(2).all(|window| window[0] == window[1]) {
                 return true;
             }
 
-            // Check for sequential bytes (increasing)
             let is_sequential_inc = key_bytes.windows(2)
                 .all(|window| window[1] == window[0].wrapping_add(1));
 
-            // Check for sequential bytes (decreasing)
             let is_sequential_dec = key_bytes.windows(2)
                 .all(|window| window[1] == window[0].wrapping_sub(1));
 
@@ -246,7 +297,6 @@ impl Cli {
                 return true;
             }
 
-            // Check for common weak patterns
             let common_weak = [
                 "00000000000000000000000000000000",
                 "ffffffffffffffffffffffffffffffff",

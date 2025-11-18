@@ -25,7 +25,7 @@ impl HashAlgorithm for Sha3_256 {
         let mut reader = BufReader::new(file);
         let mut hasher = Sha3_256Lib::new();
 
-        let mut buffer = [0u8; 8192]; // 8KB chunks
+        let mut buffer = [0u8; 8192];
         loop {
             let bytes_read = reader.read(&mut buffer)?;
             if bytes_read == 0 {

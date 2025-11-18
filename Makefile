@@ -1,4 +1,4 @@
-.PHONY: all build release test clean install test-all test-modes test-csprng test-auto-key test-weak-key test-nist test-nist-full test-nist-quick test-openssl test-comprehensive test-comprehensive-linux dev-test integration-test prepare-test clean-nist help
+.PHONY: all build release test clean install test-all test-modes test-csprng test-auto-key test-weak-key test-nist test-nist-full test-nist-quick test-openssl test-comprehensive test-comprehensive-linux dev-test integration-test prepare-test clean-nist help test-hash test-hmac test-security test-performance
 
 all: build
 
@@ -17,14 +17,14 @@ test:
 clean:
 	@echo "Cleaning build artifacts..."
 	cargo clean
-	rm -f test.txt *.enc *.dec *.bin
+	rm -f test.txt *.enc *.dec *.bin *.hmac *.sha256 *.sha3
 
 install: release
 	@echo "Installing cryptocore to /usr/local/bin/"
 	cp target/release/cryptocore /usr/local/bin/cryptocore
 
 # Полное тестирование всех компонентов
-test-all: test-csprng test-auto-key test-weak-key test-modes test-openssl
+test-all: test-csprng test-auto-key test-weak-key test-modes test-openssl test-hash test-hmac
 	@echo "All tests completed"
 
 # Тестирование всех режимов шифрования
@@ -40,7 +40,7 @@ test-csprng:
 test-auto-key: prepare-test
 	@echo "Testing automatic key generation..."
 	# Encryption with auto key generation
-	./target/release/cryptocore --algorithm aes --mode cbc --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
 		--input test.txt \
 		--output test.auto.enc
 	@echo "Auto-key test completed. Check output for generated key."
@@ -51,17 +51,57 @@ test-weak-key: prepare-test
 	@echo "Testing weak key detection..."
 	# This should show a warning but still work
 	@echo "Testing all zeros key (should show warning)..."
-	./target/release/cryptocore --algorithm aes --mode ecb --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ecb --operation encrypt \
 		--key 00000000000000000000000000000000 \
 		--input test.txt \
 		--output test.weak.enc 2>&1 | grep -q "WARNING" && echo "Weak key detection working" || echo "Weak key detection failed"
 	# Sequential bytes should also trigger warning
 	@echo "Testing sequential bytes key (should show warning)..."
-	./target/release/cryptocore --algorithm aes --mode ecb --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ecb --operation encrypt \
 		--key 000102030405060708090a0b0c0d0e0f \
 		--input test.txt \
 		--output test.weak2.enc 2>&1 | grep -q "WARNING" && echo "Sequential key detection working" || echo "Sequential key detection failed"
 	rm -f test.weak.enc test.weak2.enc test.txt
+
+# Hash function tests
+test-hash: prepare-test
+	@echo "Testing hash functions..."
+	@echo "Testing SHA-256..."
+	./target/release/cryptocore dgst --algorithm sha256 --input test.txt > test.sha256
+	@cat test.sha256 | grep -q "da7e88e01cee7b2e" && echo "SHA-256: PASS" || echo "SHA-256: FAIL"
+
+	@echo "Testing SHA3-256..."
+	./target/release/cryptocore dgst --algorithm sha3-256 --input test.txt > test.sha3
+	@cat test.sha3 | grep -q "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a" && echo "SHA3-256: PASS" || echo "SHA3-256: FAIL"
+
+	@echo "Testing hash with output file..."
+	./target/release/cryptocore dgst --algorithm sha256 --input test.txt --output test_output.sha256
+	@test -f test_output.sha256 && echo "Hash output file: PASS" || echo "Hash output file: FAIL"
+
+	rm -f test.sha256 test.sha3 test_output.sha256 test.txt
+	@echo "Hash function tests completed"
+
+# HMAC tests
+test-hmac: prepare-test
+	@echo "Testing HMAC functionality..."
+
+	@echo "Testing HMAC generation..."
+	./target/release/cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input test.txt > test.hmac
+	@cat test.hmac | grep -q ".* test.txt" && echo "HMAC generation: PASS" || echo "HMAC generation: FAIL"
+
+	@echo "Testing HMAC verification..."
+	./target/release/cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input test.txt --verify test.hmac && echo "HMAC verification: PASS" || echo "HMAC verification: FAIL"
+
+	@echo "Testing HMAC with different keys..."
+	./target/release/cryptocore dgst --algorithm sha256 --hmac --key aabbcc --input test.txt > test.hmac2
+	./target/release/cryptocore dgst --algorithm sha256 --hmac --key aabbcc --input test.txt --verify test.hmac2 && echo "HMAC different keys: PASS" || echo "HMAC different keys: FAIL"
+
+	@echo "Testing HMAC tamper detection..."
+	echo "tampered" >> test.txt
+	./target/release/cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input test.txt --verify test.hmac 2>/dev/null && echo "HMAC tamper detection: FAIL" || echo "HMAC tamper detection: PASS"
+
+	rm -f test.hmac test.hmac2 test.txt
+	@echo "HMAC tests completed"
 
 # NIST test data preparation
 test-nist:
@@ -90,11 +130,11 @@ test-nist-quick: test-nist
 # ECB mode (no IV)
 test-ecb: prepare-test
 	@echo "Testing ECB mode..."
-	./target/release/cryptocore --algorithm aes --mode ecb --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ecb --operation encrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.txt \
 		--output test.ecb.enc
-	./target/release/cryptocore --algorithm aes --mode ecb --operation decrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ecb --operation decrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.ecb.enc \
 		--output test.ecb.dec
@@ -105,12 +145,12 @@ test-ecb: prepare-test
 test-cbc: prepare-test
 	@echo "Testing CBC mode..."
 	# Encryption (auto-generates IV)
-	./target/release/cryptocore --algorithm aes --mode cbc --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.txt \
 		--output test.cbc.enc
 	# Decryption (extract IV from file)
-	./target/release/cryptocore --algorithm aes --mode cbc --operation decrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.cbc.enc \
 		--output test.cbc.dec
@@ -120,11 +160,11 @@ test-cbc: prepare-test
 # CFB mode (stream cipher)
 test-cfb: prepare-test
 	@echo "Testing CFB mode..."
-	./target/release/cryptocore --algorithm aes --mode cfb --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode cfb --operation encrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.txt \
 		--output test.cfb.enc
-	./target/release/cryptocore --algorithm aes --mode cfb --operation decrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode cfb --operation decrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.cfb.enc \
 		--output test.cfb.dec
@@ -134,11 +174,11 @@ test-cfb: prepare-test
 # OFB mode (stream cipher)
 test-ofb: prepare-test
 	@echo "Testing OFB mode..."
-	./target/release/cryptocore --algorithm aes --mode ofb --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ofb --operation encrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.txt \
 		--output test.ofb.enc
-	./target/release/cryptocore --algorithm aes --mode ofb --operation decrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ofb --operation decrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.ofb.enc \
 		--output test.ofb.dec
@@ -148,11 +188,11 @@ test-ofb: prepare-test
 # CTR mode (stream cipher)
 test-ctr: prepare-test
 	@echo "Testing CTR mode..."
-	./target/release/cryptocore --algorithm aes --mode ctr --operation encrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ctr --operation encrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.txt \
 		--output test.ctr.enc
-	./target/release/cryptocore --algorithm aes --mode ctr --operation decrypt \
+	./target/release/cryptocore crypto --algorithm aes --mode ctr --operation decrypt \
 		--key 00112233445566778899aabbccddeeff \
 		--input test.ctr.enc \
 		--output test.ctr.dec
@@ -168,7 +208,7 @@ test-openssl: prepare-test
 	# Encrypt with OpenSSL, decrypt with our tool
 	@if command -v openssl >/dev/null 2>&1; then \
 		openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv 000102030405060708090A0B0C0D0E0F -in openssl_test.txt -out openssl_encrypted.bin; \
-		./target/release/cryptocore --algorithm aes --mode cbc --operation decrypt \
+		./target/release/cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
 			--key 00112233445566778899aabbccddeeff \
 			--iv 000102030405060708090A0B0C0D0E0F \
 			--input openssl_encrypted.bin \
@@ -176,7 +216,7 @@ test-openssl: prepare-test
 		diff openssl_test.txt openssl_decrypted.txt && echo "OpenSSL->OurTool: PASS" || echo "OpenSSL->OurTool: FAIL"; \
 		\
 		# Encrypt with our tool, decrypt with OpenSSL \
-		./target/release/cryptocore --algorithm aes --mode cbc --operation encrypt \
+		./target/release/cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
 			--key 00112233445566778899aabbccddeeff \
 			--input openssl_test.txt \
 			--output our_encrypted.bin; \
@@ -225,7 +265,7 @@ clean-nist:
 	fi
 
 # Development quick test
-dev-test: prepare-test test-csprng test-auto-key test-ecb test-cbc
+dev-test: prepare-test test-csprng test-auto-key test-ecb test-cbc test-hash test-hmac
 	@echo "Development tests completed"
 	rm -f test.txt
 
@@ -238,7 +278,7 @@ quick: build test-comprehensive
 	@echo "Quick build and test completed"
 
 # Security-focused testing
-test-security: test-csprng test-weak-key test-nist-quick
+test-security: test-csprng test-weak-key test-nist-quick test-hmac
 	@echo "Security tests completed"
 
 # Performance testing
@@ -250,12 +290,26 @@ test-performance: release
 	else \
 		echo "Generating performance test data..."; \
 		dd if=/dev/urandom of=perf_test_10mb.bin bs=1M count=10 2>/dev/null; \
-		time ./target/release/cryptocore --algorithm aes --mode ctr --operation encrypt \
+		time ./target/release/cryptocore crypto --algorithm aes --mode ctr --operation encrypt \
 			--key 00112233445566778899aabbccddeeff \
 			--input perf_test_10mb.bin \
 			--output perf_test_10mb.enc; \
+		echo "Testing hash performance..."; \
+		time ./target/release/cryptocore dgst --algorithm sha256 --input perf_test_10mb.bin; \
+		echo "Testing HMAC performance..."; \
+		time ./target/release/cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input perf_test_10mb.bin; \
 		rm -f perf_test_10mb.bin perf_test_10mb.enc; \
 	fi
+
+# RFC 4231 HMAC test vectors
+test-hmac-rfc:
+	@echo "Testing HMAC with RFC 4231 test vectors..."
+	cargo test --test hmac -- --nocapture
+	@echo "RFC 4231 HMAC tests completed"
+
+# All hash-related tests
+test-hash-all: test-hash test-hmac test-hmac-rfc
+	@echo "All hash and HMAC tests completed"
 
 # Help target
 help:
@@ -272,6 +326,10 @@ help:
 	@echo "  test-all       - Run all component tests"
 	@echo "  test-modes     - Test all encryption modes"
 	@echo "  test-csprng    - Test CSPRNG module"
+	@echo "  test-hash      - Test hash functions (SHA-256, SHA3-256)"
+	@echo "  test-hmac      - Test HMAC functionality"
+	@echo "  test-hmac-rfc  - Test HMAC with RFC 4231 vectors"
+	@echo "  test-hash-all  - Test all hash and HMAC functionality"
 	@echo "  test-nist      - Generate NIST test data"
 	@echo "  test-nist-full - Run full NIST STS suite"
 	@echo "  test-nist-quick- Quick NIST validation"
@@ -293,5 +351,7 @@ help:
 	@echo ""
 	@echo "Example usage:"
 	@echo "  make dev-test          # Quick development cycle"
+	@echo "  make test-hash-all     # Test all hash/HMAC functionality"
 	@echo "  make test-nist-full    # Full cryptographic validation"
 	@echo "  make test-all          # Complete test suite"
+	@echo "  make test-security     # Security-focused testing"

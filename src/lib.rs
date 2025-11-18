@@ -3,9 +3,11 @@ pub mod crypto;
 pub mod file;
 pub mod csprng;
 pub mod hash;
+pub mod mac;
 
 pub use cli::{Cli, Mode, Operation};
 pub use crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb};
+pub use mac::HMAC;
 
 #[cfg(test)]
 mod tests {

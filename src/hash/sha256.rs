@@ -14,7 +14,6 @@ impl Sha256 {
 
 impl HashAlgorithm for Sha256 {
     fn hash_file(&self, file_path: &Path) -> Result<String> {
-        // Handle stdin case
         if file_path.to_str() == Some("-") {
             let mut data = Vec::new();
             std::io::stdin().read_to_end(&mut data)?;
@@ -44,7 +43,7 @@ impl HashAlgorithm for Sha256 {
     }
 }
 
-struct Sha256Hasher {
+pub struct Sha256Hasher {
     h: [u32; 8],
     message_len: u64,
     buffer: Vec<u8>,
