@@ -1308,5 +1308,5 @@ cryptocore crypto --algorithm aes --mode etm --base-mode ctr --operation decrypt
 6. **Для вычисления хешей** используйте команду `dgst` с указанием алгоритма
 7. **Для HMAC** используйте флаг `--hmac` с обязательным ключом `--key`
 8. **Для AEAD режимов** - используйте `--aad` для дополнительных аутентифицированных данных
-9. **В PowerShell используйте `.\` и `powershell -ExecutionPolicy Bypass -File .\` перед cryptocore или измените политику выполнения для текущей сессии `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process` ** - это требование безопасности PowerShell для запуска локальных исполняемых файлов
-10. **При вызове в Powershell может потребоваться добавлять .exe  конце вызова `./cryptopro.exe`, если утилита не прописана в переменной окружения PATH **
+9. **В PowerShell используйте `.\` и `powershell -ExecutionPolicy Bypass -File .\` перед cryptocore или измените политику выполнения для текущей сессии `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process`** - это требование безопасности PowerShell для запуска локальных исполняемых файлов
+10. **При вызове в Powershell может потребоваться добавлять .exe  конце вызова `./cryptopro.exe`, если утилита не прописана в переменной окружения PATH**
