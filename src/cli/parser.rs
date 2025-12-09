@@ -13,6 +13,8 @@ pub enum Mode {
     Cfb,
     Ofb,
     Ctr,
+    Gcm,
+    Etm,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
@@ -37,7 +39,9 @@ pub enum Command {
             long,
             value_enum,
             help = "Mode of operation",
-            long_help = "Specifies the mode of operation: ecb, cbc, cfb, ofb, ctr"
+            long_help = "Specifies the mode of operation: ecb, cbc, cfb, ofb, ctr, gcm, etm\n\n\
+                        ETM (Encrypt-then-MAC) mode combines any block cipher mode with HMAC-SHA256.\n\
+                        For ETM mode, specify base mode with --base-mode (default: cbc)."
         )]
         mode: Mode,
 
@@ -73,9 +77,33 @@ pub enum Command {
         #[arg(
             long,
             help = "Initialization Vector as hexadecimal string (for decryption)",
-            long_help = "16-byte IV provided as 32-character hexadecimal string. Required for decryption, ignored for encryption."
+            long_help = "16-byte IV provided as 32-character hexadecimal string. Required for decryption in ECB/CBC/CFB/OFB/CTR modes, ignored for encryption. For GCM mode, use --nonce."
         )]
         iv: Option<String>,
+
+        #[arg(
+            long,
+            help = "Nonce for GCM mode (12 bytes as hex)",
+            long_help = "12-byte nonce provided as 24-character hexadecimal string. For GCM encryption, if not provided, random nonce will be generated. For GCM decryption, can be read from file or provided here."
+        )]
+        nonce: Option<String>,
+
+        #[arg(
+            long,
+            help = "Associated Authenticated Data for authenticated modes (hex string)",
+            long_help = "Additional authenticated data (AAD) for GCM and ETM modes as hexadecimal string. Optional, treated as empty if not provided."
+        )]
+        aad: Option<String>,
+
+        #[arg(
+            long,
+            value_enum,
+            help = "Base mode for ETM (Encrypt-then-MAC)",
+            long_help = "Specifies the base encryption mode when using ETM mode.\n\
+                        Only used when --mode is set to 'etm'.\n\
+                        Options: ecb, cbc, cfb, ofb, ctr",
+        )]
+        base_mode: Option<Mode>,
     },
 
     /// Compute message digests (hash) of files
@@ -127,24 +155,41 @@ pub enum Command {
 #[derive(Parser, Debug)]
 #[command(
     name = "cryptocore",
-    version = "0.5.0",
-    about = "CryptoCore - Encryption/decryption, hashing and HMAC tool",
+    version = "0.6.0",
+    about = "CryptoCore - Encryption/decryption, hashing and HMAC tool with AEAD support",
     long_about = r#"
-CryptoCore: A command-line tool for AES-128 encryption/decryption, hash computation and HMAC.
+CryptoCore: A command-line tool for AES-128 encryption/decryption, hash computation, HMAC and authenticated encryption.
 
 Encryption/Decryption:
-  Supported modes: ECB, CBC, CFB, OFB, CTR
+  Supported modes: ECB, CBC, CFB, OFB, CTR, GCM, ETM (NEW)
   For encryption, --key is optional (random key will be generated)
+
+Authenticated Encryption (NEW in v0.6.0):
+  GCM mode with AAD support (--aad flag)
+  ETM (Encrypt-then-MAC) mode combining any block mode with HMAC-SHA256
+    Use --base-mode to specify underlying encryption mode (default: cbc)
 
 Hashing:
   Supported algorithms: SHA-256, SHA3-256
   Output format: HASH_VALUE INPUT_FILE_PATH (compatible with *sum tools)
 
 HMAC:
-  New in v0.5.0: HMAC-SHA256 support with --hmac and --key flags
+  HMAC-SHA256 support with --hmac and --key flags
   Verification support with --verify flag
 
 Examples:
+  GCM Encryption with AAD:
+    cryptocore crypto --algorithm aes --mode gcm --operation encrypt --key KEY --input plain.txt --output cipher.bin --aad AABBCC
+
+  GCM Decryption with AAD:
+    cryptocore crypto --algorithm aes --mode gcm --operation decrypt --key KEY --input cipher.bin --output decrypted.txt --aad AABBCC
+
+  ETM Encryption with CBC as base mode:
+    cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt --key KEY --input plain.txt --output cipher.bin --aad AABBCC
+
+  ETM Decryption:
+    cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt --key KEY --input cipher.bin --output decrypted.txt --aad AABBCC
+
   Encryption with automatic key generation:
     cryptocore crypto --algorithm aes --mode cbc --operation encrypt --input plain.txt --output cipher.bin
 
@@ -168,12 +213,15 @@ impl Cli {
         match &self.command {
             Command::Crypto {
                 algorithm: _,
-                mode: _,
+                mode,
                 operation,
                 key,
                 input,
                 output: _,
-                iv
+                iv,
+                nonce,
+                aad,
+                base_mode,
             } => {
                 if let Some(key) = key {
                     let key_str = key.trim_start_matches('@');
@@ -192,18 +240,70 @@ impl Cli {
                     return Err("Key is required for decryption".to_string());
                 }
 
-                if let Some(iv) = iv {
-                    let iv_str = iv.trim_start_matches('@');
-                    if iv_str.len() != 32 {
-                        return Err(format!("IV must be 32 hex characters, got {}", iv_str.len()));
+                if *mode == Mode::Etm {
+                    if let Some(bm) = base_mode {
+                        match bm {
+                            Mode::Gcm | Mode::Etm => {
+                                return Err("ETM base mode cannot be GCM or ETM".to_string());
+                            }
+                            _ => {}
+                        }
                     }
-
-                    if hex::decode(iv_str).is_err() {
-                        return Err("IV must be a valid hexadecimal string".to_string());
+                } else {
+                    if base_mode.is_some() {
+                        return Err("--base-mode should only be used with --mode etm".to_string());
                     }
+                }
 
-                    if *operation == Operation::Encrypt {
-                        return Err("IV should not be provided for encryption".to_string());
+                match mode {
+                    Mode::Gcm => {
+                        if let Some(nonce_val) = nonce {
+                            let nonce_str = nonce_val.trim_start_matches('@');
+                            if nonce_str.len() != 24 {
+                                return Err(format!("Nonce must be 24 hex characters (12 bytes) for GCM, got {}", nonce_str.len()));
+                            }
+                            if hex::decode(nonce_str).is_err() {
+                                return Err("Nonce must be a valid hexadecimal string".to_string());
+                            }
+                        }
+                        if iv.is_some() {
+                            eprintln!("[WARNING] --iv is deprecated for GCM mode, use --nonce instead");
+                        }
+                    }
+                    Mode::Etm => {
+                        if let Some(iv_val) = iv {
+                            let iv_str = iv_val.trim_start_matches('@');
+                            if iv_str.len() != 32 {
+                                return Err(format!("IV must be 32 hex characters, got {}", iv_str.len()));
+                            }
+                            if hex::decode(iv_str).is_err() {
+                                return Err("IV must be a valid hexadecimal string".to_string());
+                            }
+                            if *operation == Operation::Encrypt {
+                                return Err("IV should not be provided for encryption in ETM mode".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(iv_val) = iv {
+                            let iv_str = iv_val.trim_start_matches('@');
+                            if iv_str.len() != 32 {
+                                return Err(format!("IV must be 32 hex characters, got {}", iv_str.len()));
+                            }
+                            if hex::decode(iv_str).is_err() {
+                                return Err("IV must be a valid hexadecimal string".to_string());
+                            }
+                            if *operation == Operation::Encrypt {
+                                return Err("IV should not be provided for encryption".to_string());
+                            }
+                        }
+                    }
+                }
+
+                if let Some(aad_val) = aad {
+                    let aad_str = aad_val.trim_start_matches('@');
+                    if hex::decode(aad_str).is_err() {
+                        return Err("AAD must be a valid hexadecimal string".to_string());
                     }
                 }
 
@@ -275,7 +375,6 @@ impl Cli {
         }
     }
 
-    /// Checks if a key is weak (all zeros, sequential bytes, etc.)
     pub fn is_weak_key(key_hex: &str) -> bool {
         let key_str = key_hex.trim_start_matches('@');
         if let Ok(key_bytes) = hex::decode(key_str) {

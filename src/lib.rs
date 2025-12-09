@@ -7,7 +7,7 @@ pub mod mac;
 
 pub use cli::{Cli, Mode, Operation};
 pub use crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb};
-pub use mac::HMAC;
+pub use mac::hmac;
 
 #[cfg(test)]
 mod tests {

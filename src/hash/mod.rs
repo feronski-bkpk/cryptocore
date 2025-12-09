@@ -31,6 +31,7 @@ impl HashType {
 }
 
 pub trait HashAlgorithm {
+    #[allow(dead_code)]
     fn hash_file(&self, file_path: &Path) -> Result<String>;
     fn hash_data(&self, data: &[u8]) -> Result<String>;
 }

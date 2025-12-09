@@ -3,6 +3,7 @@ pub mod cfb;
 pub mod ofb;
 pub mod ctr;
 pub mod ecb;
+pub mod gcm;
 
 use anyhow::Result;
 
@@ -16,3 +17,4 @@ pub use cfb::Cfb;
 pub use ofb::Ofb;
 pub use ctr::Ctr;
 pub use ecb::Ecb;
+pub use gcm::Gcm;

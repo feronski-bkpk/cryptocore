@@ -1,4 +1,4 @@
-.PHONY: all build release test clean install test-all test-modes test-csprng test-auto-key test-weak-key test-nist test-nist-full test-nist-quick test-openssl test-comprehensive test-comprehensive-linux dev-test integration-test prepare-test clean-nist help test-hash test-hmac test-security test-performance
+.PHONY: all build release test clean install test-all test-modes test-csprng test-auto-key test-weak-key test-nist test-nist-full test-nist-quick test-openssl test-comprehensive test-comprehensive-linux dev-test integration-test prepare-test clean-nist help test-hash test-hmac test-security test-performance test-aead test-gcm test-etm test-openssl-aead test-catastrophic-failure
 
 all: build
 
@@ -17,19 +17,23 @@ test:
 clean:
 	@echo "Cleaning build artifacts..."
 	cargo clean
-	rm -f test.txt *.enc *.dec *.bin *.hmac *.sha256 *.sha3
+	rm -f test.txt *.enc *.dec *.bin *.hmac *.sha256 *.sha3 *.gcm *.etm *.tag *.aad
 
 install: release
 	@echo "Installing cryptocore to /usr/local/bin/"
 	cp target/release/cryptocore /usr/local/bin/cryptocore
 
 # Полное тестирование всех компонентов
-test-all: test-csprng test-auto-key test-weak-key test-modes test-openssl test-hash test-hmac
+test-all: test-csprng test-auto-key test-weak-key test-modes test-openssl test-hash test-hmac test-aead
 	@echo "All tests completed"
 
 # Тестирование всех режимов шифрования
-test-modes: test-ecb test-cbc test-cfb test-ofb test-ctr
+test-modes: test-ecb test-cbc test-cfb test-ofb test-ctr test-gcm test-etm
 	@echo "All encryption mode tests completed"
+
+# AEAD tests (GCM + ETM)
+test-aead: test-gcm test-etm test-catastrophic-failure test-openssl-aead
+	@echo "All AEAD tests completed"
 
 # CSPRNG specific tests
 test-csprng:
@@ -102,6 +106,116 @@ test-hmac: prepare-test
 
 	rm -f test.hmac test.hmac2 test.txt
 	@echo "HMAC tests completed"
+
+# GCM mode tests
+test-gcm: prepare-test
+	@echo "Testing GCM (Galois/Counter Mode)..."
+	@echo "Testing GCM encryption with AAD..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+		--key 00000000000000000000000000000000 \
+		--nonce 000000000000000000000000 \
+		--aad aabbccddeeff \
+		--input test.txt \
+		--output test.gcm.enc
+	@echo "Testing GCM decryption with correct AAD..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+		--key 00000000000000000000000000000000 \
+		--aad aabbccddeeff \
+		--input test.gcm.enc \
+		--output test.gcm.dec
+	diff test.txt test.gcm.dec && echo "GCM with AAD: PASS" || echo "GCM with AAD: FAIL"
+
+	@echo "Testing GCM with automatic nonce generation..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+		--key 00000000000000000000000000000000 \
+		--aad aabbccddeeff \
+		--input test.txt \
+		--output test.gcm.auto.enc
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+		--key 00000000000000000000000000000000 \
+		--aad aabbccddeeff \
+		--input test.gcm.auto.enc \
+		--output test.gcm.auto.dec
+	diff test.txt test.gcm.auto.dec && echo "GCM auto nonce: PASS" || echo "GCM auto nonce: FAIL"
+
+	@echo "Testing GCM with empty AAD..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+		--key 00000000000000000000000000000000 \
+		--nonce 000000000000000000000000 \
+		--input test.txt \
+		--output test.gcm.empty.enc
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+		--key 00000000000000000000000000000000 \
+		--input test.gcm.empty.enc \
+		--output test.gcm.empty.dec
+	diff test.txt test.gcm.empty.dec && echo "GCM empty AAD: PASS" || echo "GCM empty AAD: FAIL"
+
+	rm -f test.gcm.* test.txt
+	@echo "GCM tests completed"
+
+# Encrypt-then-MAC tests
+test-etm: prepare-test
+	@echo "Testing Encrypt-then-MAC (ETM) mode..."
+
+	@echo "Testing ETM with CBC base mode..."
+	./target/release/cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt \
+		--key 00112233445566778899aabbccddeeff \
+		--aad aabbccddeeff001122334455 \
+		--input test.txt \
+		--output test.etm.cbc.enc
+	./target/release/cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt \
+		--key 00112233445566778899aabbccddeeff \
+		--aad aabbccddeeff001122334455 \
+		--input test.etm.cbc.enc \
+		--output test.etm.cbc.dec
+	diff test.txt test.etm.cbc.dec && echo "ETM-CBC: PASS" || echo "ETM-CBC: FAIL"
+
+	@echo "Testing ETM with CTR base mode..."
+	./target/release/cryptocore crypto --algorithm aes --mode etm --base-mode ctr --operation encrypt \
+		--key 00112233445566778899aabbccddeeff \
+		--aad aabbccddeeff001122334455 \
+		--input test.txt \
+		--output test.etm.ctr.enc
+	./target/release/cryptocore crypto --algorithm aes --mode etm --base-mode ctr --operation decrypt \
+		--key 00112233445566778899aabbccddeeff \
+		--aad aabbccddeeff001122334455 \
+		--input test.etm.ctr.enc \
+		--output test.etm.ctr.dec
+	diff test.txt test.etm.ctr.dec && echo "ETM-CTR: PASS" || echo "ETM-CTR: FAIL"
+
+	rm -f test.etm.* test.txt
+	@echo "ETM tests completed"
+
+# Test catastrophic authentication failure (Sprint 6 requirement)
+test-catastrophic-failure: prepare-test
+	@echo "Testing catastrophic authentication failure..."
+
+	@echo "Creating GCM encrypted file..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+		--key 00000000000000000000000000000000 \
+		--nonce 000000000000000000000000 \
+		--aad correctaad \
+		--input test.txt \
+		--output test.gcm.auth.enc
+
+	@echo "Testing wrong AAD (should fail catastrophically)..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+		--key 00000000000000000000000000000000 \
+		--aad wrongaad \
+		--input test.gcm.auth.enc \
+		--output test.gcm.wrong.dec 2>&1 | grep -q "Authentication failed" && echo "Catastrophic failure (wrong AAD): PASS" || echo "Catastrophic failure (wrong AAD): FAIL"
+	# Verify no output file was created
+	test ! -f test.gcm.wrong.dec && echo "No output file created on failure: PASS" || echo "No output file created on failure: FAIL"
+
+	@echo "Testing wrong key (should fail)..."
+	./target/release/cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+		--key ffffffffffffffffffffffffffffffff \
+		--aad correctaad \
+		--input test.gcm.auth.enc \
+		--output test.gcm.wrongkey.dec 2>&1 | grep -q "Authentication failed" && echo "Catastrophic failure (wrong key): PASS" || echo "Catastrophic failure (wrong key): FAIL"
+
+	rm -f test.gcm.* test.txt
+	@echo "Catastrophic failure tests completed"
 
 # NIST test data preparation
 test-nist:
@@ -199,7 +313,7 @@ test-ctr: prepare-test
 	diff test.txt test.ctr.dec && echo "CTR: PASS" || echo "CTR: FAIL"
 	rm -f test.ctr.enc test.ctr.dec test.txt
 
-# Interoperability test with OpenSSL
+# Interoperability test with OpenSSL for classic modes
 test-openssl: prepare-test
 	@echo "Testing OpenSSL interoperability..."
 	# Create test file
@@ -230,6 +344,40 @@ test-openssl: prepare-test
 		rm -f openssl_test.txt openssl_encrypted.bin openssl_decrypted.txt our_encrypted.bin extracted_iv.bin ciphertext_only.bin openssl_decrypted2.txt; \
 	else \
 		echo "OpenSSL not found, skipping interoperability tests"; \
+	fi
+
+# Interoperability test with OpenSSL for GCM
+test-openssl-aead: prepare-test
+	@echo "Testing OpenSSL GCM interoperability..."
+	@if command -v openssl >/dev/null 2>&1; then \
+		echo "Testing GCM interoperability with OpenSSL..."; \
+		# Create test file \
+		echo "GCM OpenSSL Interop Test" > gcm_openssl_test.txt; \
+		\
+		# Encrypt with OpenSSL GCM \
+		echo "Encrypting with OpenSSL GCM..."; \
+		openssl enc -aes-128-gcm -K 00000000000000000000000000000000 -iv 000000000000000000000000 -a -A -aad aabbccddeeff -in gcm_openssl_test.txt -out gcm_openssl_enc.bin 2>/dev/null; \
+		if [ $$? -eq 0 ]; then \
+			echo "OpenSSL GCM encryption successful"; \
+			# Try to decrypt with our tool \
+			./target/release/cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+				--key 00000000000000000000000000000000 \
+				--aad aabbccddeeff \
+				--input gcm_openssl_enc.bin \
+				--output gcm_our_decrypted.txt 2>&1; \
+			if [ $$? -eq 0 ]; then \
+				diff gcm_openssl_test.txt gcm_our_decrypted.txt && echo "OpenSSL GCM -> OurTool: PASS" || echo "OpenSSL GCM -> OurTool: FAIL (content mismatch)"; \
+			else \
+				echo "OpenSSL GCM -> OurTool: FAIL (decryption error)"; \
+			fi; \
+		else \
+			echo "OpenSSL GCM encryption failed, skipping GCM interop test"; \
+		fi; \
+		\
+		# Cleanup \
+		rm -f gcm_openssl_test.txt gcm_openssl_enc.bin gcm_our_decrypted.txt 2>/dev/null || true; \
+	else \
+		echo "OpenSSL not found, skipping AEAD interoperability tests"; \
 	fi
 
 # Run comprehensive test scripts
@@ -265,7 +413,7 @@ clean-nist:
 	fi
 
 # Development quick test
-dev-test: prepare-test test-csprng test-auto-key test-ecb test-cbc test-hash test-hmac
+dev-test: prepare-test test-csprng test-auto-key test-ecb test-cbc test-hash test-hmac test-gcm
 	@echo "Development tests completed"
 	rm -f test.txt
 
@@ -278,7 +426,7 @@ quick: build test-comprehensive
 	@echo "Quick build and test completed"
 
 # Security-focused testing
-test-security: test-csprng test-weak-key test-nist-quick test-hmac
+test-security: test-csprng test-weak-key test-nist-quick test-hmac test-catastrophic-failure
 	@echo "Security tests completed"
 
 # Performance testing
@@ -298,7 +446,13 @@ test-performance: release
 		time ./target/release/cryptocore dgst --algorithm sha256 --input perf_test_10mb.bin; \
 		echo "Testing HMAC performance..."; \
 		time ./target/release/cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input perf_test_10mb.bin; \
-		rm -f perf_test_10mb.bin perf_test_10mb.enc; \
+		echo "Testing GCM performance..."; \
+		time ./target/release/cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+			--key 00112233445566778899aabbccddeeff \
+			--aad "testaad" \
+			--input perf_test_10mb.bin \
+			--output perf_test_10mb.gcm.enc; \
+		rm -f perf_test_10mb.bin perf_test_10mb.enc perf_test_10mb.gcm.enc; \
 	fi
 
 # RFC 4231 HMAC test vectors
@@ -310,6 +464,28 @@ test-hmac-rfc:
 # All hash-related tests
 test-hash-all: test-hash test-hmac test-hmac-rfc
 	@echo "All hash and HMAC tests completed"
+
+# Unit tests for new modules
+test-unit-aead:
+	@echo "Running unit tests for AEAD modules..."
+	cargo test --test aead -- --nocapture
+	cargo test --test gcm -- --nocapture
+
+# Validation tests for AEAD
+test-validate-aead:
+	@echo "Validating AEAD implementation..."
+	@echo "Checking GCM implementation..."
+	@if cargo test --test gcm 2>&1 | grep -q "test result: ok"; then \
+		echo "GCM unit tests: PASS"; \
+	else \
+		echo "GCM unit tests: FAIL"; \
+	fi
+	@echo "Checking AEAD interface..."
+	@if cargo test --test aead 2>&1 | grep -q "test result: ok"; then \
+		echo "AEAD unit tests: PASS"; \
+	else \
+		echo "AEAD unit tests: FAIL"; \
+	fi
 
 # Help target
 help:
@@ -325,6 +501,10 @@ help:
 	@echo "  test           - Run unit tests"
 	@echo "  test-all       - Run all component tests"
 	@echo "  test-modes     - Test all encryption modes"
+	@echo "  test-aead      - Test AEAD modes (GCM and ETM)"
+	@echo "  test-gcm       - Test GCM mode"
+	@echo "  test-etm       - Test Encrypt-then-MAC mode"
+	@echo "  test-catastrophic-failure - Test authentication failure handling"
 	@echo "  test-csprng    - Test CSPRNG module"
 	@echo "  test-hash      - Test hash functions (SHA-256, SHA3-256)"
 	@echo "  test-hmac      - Test HMAC functionality"
@@ -333,9 +513,12 @@ help:
 	@echo "  test-nist      - Generate NIST test data"
 	@echo "  test-nist-full - Run full NIST STS suite"
 	@echo "  test-nist-quick- Quick NIST validation"
-	@echo "  test-openssl   - Test OpenSSL interoperability"
+	@echo "  test-openssl   - Test OpenSSL interoperability (classic modes)"
+	@echo "  test-openssl-aead - Test OpenSSL interoperability (GCM)"
 	@echo "  test-security  - Run security-focused tests"
 	@echo "  test-performance - Run performance tests"
+	@echo "  test-unit-aead - Run unit tests for AEAD modules"
+	@echo "  test-validate-aead - Validate AEAD implementation"
 	@echo ""
 	@echo "Development:"
 	@echo "  dev-test       - Quick development tests"
@@ -349,9 +532,16 @@ help:
 	@echo "Cleanup:"
 	@echo "  clean-nist     - Clean NIST test data"
 	@echo ""
+	@echo "Sprint 6 Requirements Coverage:"
+	@echo "  ✓ test-gcm - Tests GCM implementation (AEAD-2)"
+	@echo "  ✓ test-etm - Tests Encrypt-then-MAC (AEAD-1)"
+	@echo "  ✓ test-catastrophic-failure - Tests CLI-5 requirement"
+	@echo "  ✓ test-openssl-aead - Tests TEST-8 requirement"
+	@echo ""
 	@echo "Example usage:"
 	@echo "  make dev-test          # Quick development cycle"
-	@echo "  make test-hash-all     # Test all hash/HMAC functionality"
-	@echo "  make test-nist-full    # Full cryptographic validation"
-	@echo "  make test-all          # Complete test suite"
+	@echo "  make test-aead         # Test all AEAD functionality"
 	@echo "  make test-security     # Security-focused testing"
+	@echo "  make test-all          # Complete test suite"
+	@echo "  make test-gcm          # Test GCM mode specifically"
+	@echo "  make test-validate-aead # Validate AEAD implementation"

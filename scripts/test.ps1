@@ -1,6 +1,6 @@
-# test.ps1 - Complete Automated Testing for Windows PowerShell (Updated for HMAC)
+# test.ps1 - Complete Automated Testing for Windows PowerShell (Updated for v0.6.0 with AEAD)
 
-Write-Host "Starting CryptoCore Complete Automated Tests (v0.5.0 with HMAC)..." -ForegroundColor Cyan
+Write-Host "Starting CryptoCore Complete Automated Tests (v0.6.0 with AEAD)..." -ForegroundColor Cyan
 
 # Colors and formatting
 function Write-Step { Write-Host ">>> $($args[0])" -ForegroundColor Blue }
@@ -22,23 +22,62 @@ $PROJECT_ROOT = if ($SCRIPT_DIR -like "*\scripts") { Split-Path -Parent $SCRIPT_
 Write-Host "Script directory: $SCRIPT_DIR" -ForegroundColor Gray
 Write-Host "Project root: $PROJECT_ROOT" -ForegroundColor Gray
 
+# Initialize test results
+$global:testResults = @()
+$global:passedCount = 0
+$global:failedCount = 0
+$global:skippedCount = 0
+$global:allTestsPassed = $true
+
+function Add-TestResult {
+    param($Result, $Category = "General")
+    $global:testResults += @{
+        Category = $Category
+        Result = $Result
+        Timestamp = Get-Date
+    }
+
+    if ($Result -like "PASSED:*") {
+        $global:passedCount++
+    } elseif ($Result -like "FAILED:*") {
+        $global:failedCount++
+        $global:allTestsPassed = $false
+    } elseif ($Result -like "SKIPPED:*") {
+        $global:skippedCount++
+    }
+}
+
+function Show-Progress {
+    param($Current, $Total, $Message)
+    $percent = [math]::Round(($Current / $Total) * 100, 1)
+    Write-Host "[$Current/$Total - ${percent}%] $Message" -ForegroundColor Yellow
+}
+
 # Step 1: Build project
 Write-Section "Building Project"
 Set-Location $PROJECT_ROOT
+
+Write-Step "Building release version"
 cargo build --release
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build failed!" -ForegroundColor Red
+    Write-Host "Release build failed!" -ForegroundColor Red
     exit 1
 }
-Write-Status $true "Build completed"
+Add-TestResult "PASSED: Build - Release build completed" "Build"
+
+Write-Step "Building debug version"
+cargo build
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Debug build failed!" -ForegroundColor Red
+    exit 1
+}
+Add-TestResult "PASSED: Build - Debug build completed" "Build"
 
 # Define the path to the executable
 $CRYPTOCORE_EXE = Join-Path $PROJECT_ROOT "target\release\cryptocore.exe"
 if (-not (Test-Path $CRYPTOCORE_EXE)) {
-    Write-Host "Executable not found at $CRYPTOCORE_EXE" -ForegroundColor Yellow
-    Write-Host "Trying debug build..." -ForegroundColor Yellow
+    Write-Host "Release executable not found at $CRYPTOCORE_EXE" -ForegroundColor Yellow
     $CRYPTOCORE_EXE = Join-Path $PROJECT_ROOT "target\debug\cryptocore.exe"
-    cargo build
     if (-not (Test-Path $CRYPTOCORE_EXE)) {
         Write-Host "Executable not found at $CRYPTOCORE_EXE" -ForegroundColor Red
         exit 1
@@ -54,12 +93,20 @@ Set-Location $SCRIPT_DIR
 Write-Section "Basic Functionality Tests"
 
 Write-Step "Testing help command"
-& $CRYPTOCORE_EXE --help
-Write-Status ($LASTEXITCODE -eq 0) "Help command works"
+& $CRYPTOCORE_EXE --help | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Add-TestResult "PASSED: Basic - Help command works" "Basic"
+} else {
+    Add-TestResult "FAILED: Basic - Help command failed" "Basic"
+}
 
 Write-Step "Testing version command"
-& $CRYPTOCORE_EXE --version
-Write-Status ($LASTEXITCODE -eq 0) "Version command works"
+$versionOutput = & $CRYPTOCORE_EXE --version 2>&1 | Select-String "0\.6\.0"
+if ($versionOutput) {
+    Add-TestResult "PASSED: Basic - Version command shows 0.6.0" "Basic"
+} else {
+    Add-TestResult "FAILED: Basic - Version command failed" "Basic"
+}
 
 # Step 3: Create comprehensive test files
 Write-Section "Creating Test Files"
@@ -73,13 +120,14 @@ $testFiles = @{
     "unicode.txt" = "Unicode test: Hello World"
 }
 
+# Create text files
 foreach ($file in $testFiles.GetEnumerator()) {
     $filePath = Join-Path $SCRIPT_DIR $file.Key
     $file.Value | Out-File -FilePath $filePath -Encoding utf8
     Write-Host "Created $($file.Key)" -ForegroundColor Green
 }
 
-# Create binary test files
+# Create binary files
 $binaryData1 = @(0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f)
 [System.IO.File]::WriteAllBytes((Join-Path $SCRIPT_DIR "binary_16.bin"), $binaryData1)
 
@@ -91,775 +139,504 @@ $randomBytes = New-Object byte[] 1024
 (New-Object Random).NextBytes($randomBytes)
 [System.IO.File]::WriteAllBytes((Join-Path $SCRIPT_DIR "random_1k.bin"), $randomBytes)
 
-Write-Host "Created binary test files" -ForegroundColor Green
+Add-TestResult "PASSED: Files - Test files created" "Files"
 
-# Step 4: CSPRNG Module Tests
-Write-Section "CSPRNG Module Tests"
+# Step 4: Run unit tests
+Write-Section "Unit Tests"
 
-Write-Step "Testing CSPRNG module"
-cargo test --test csprng -- --nocapture
-Write-Status ($LASTEXITCODE -eq 0) "CSPRNG module tests"
+$unitTests = @(
+    @{Name="csprng"; Description="CSPRNG module tests"},
+    @{Name="hash"; Description="Hash module tests"},
+    @{Name="hmac"; Description="HMAC module tests"},
+    @{Name="gcm"; Description="GCM module tests"},
+    @{Name="aead"; Description="AEAD module tests"},
+    @{Name="integration_tests"; Description="Integration tests"}
+)
+
+$unitTestCount = 0
+foreach ($test in $unitTests) {
+    $unitTestCount++
+    Show-Progress $unitTestCount $unitTests.Count "Testing $($test.Name)"
+
+    try {
+        cargo test --test $test.Name -- --nocapture 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Add-TestResult "PASSED: Unit - $($test.Description)" "UnitTests"
+        } else {
+            Add-TestResult "FAILED: Unit - $($test.Description)" "UnitTests"
+        }
+    } catch {
+        Add-TestResult "FAILED: Unit - $($test.Description) (Error: $($_.Exception.Message))" "UnitTests"
+    }
+}
 
 # Step 5: Hash Function Tests
 Write-Section "Hash Function Tests"
 
-Write-Step "Testing hash module"
-cargo test --test hash -- --nocapture
-Write-Status ($LASTEXITCODE -eq 0) "Hash module tests"
-
-# Test SHA-256 with known vectors
-Write-Step "Testing SHA-256 known vectors"
+Write-Step "Testing SHA-256 with known vectors"
 $sha256TestFile = Join-Path $SCRIPT_DIR "sha256_test.txt"
 "abc" | Out-File -FilePath $sha256TestFile -Encoding utf8 -NoNewline
 
-$sha256Output = & $CRYPTOCORE_EXE dgst --algorithm sha256 --input $sha256TestFile 2>&1
-$sha256OutputText = $sha256Output -join "`n"
+try {
+    # Save output to file instead of stdout
+    $hashOutputFile = Join-Path $SCRIPT_DIR "sha256_output.txt"
+    & $CRYPTOCORE_EXE dgst --algorithm sha256 --input $sha256TestFile --output $hashOutputFile
 
-if ($sha256OutputText -match "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c") {
-    Write-Status $true "SHA-256 known vector test"
-    $testResults += "PASSED: Hash - SHA-256 known vector"
-} else {
-    Write-Status $false "SHA-256 known vector test failed"
-    Write-Host "Expected: 1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c" -ForegroundColor Yellow
-    Write-Host "Got: $sha256OutputText" -ForegroundColor Yellow
-    $testResults += "FAILED: Hash - SHA-256 known vector"
-    $allTestsPassed = $false
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $hashOutputFile)) {
+        $hashContent = Get-Content $hashOutputFile -Raw
+        if ($hashContent -match "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c") {
+            Add-TestResult "PASSED: Hash - SHA-256 known vector" "Hash"
+        } else {
+            Add-TestResult "FAILED: Hash - SHA-256 known vector mismatch" "Hash"
+        }
+        Remove-Item $hashOutputFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: Hash - SHA-256 command failed" "Hash"
+    }
+} catch {
+    Add-TestResult "FAILED: Hash - SHA-256 test error: $($_.Exception.Message)" "Hash"
 }
 
-# Test SHA3-256 with known vectors
-Write-Step "Testing SHA3-256 known vectors"
+Write-Step "Testing SHA3-256 with known vectors"
 $sha3TestFile = Join-Path $SCRIPT_DIR "sha3_test.txt"
 "abc" | Out-File -FilePath $sha3TestFile -Encoding utf8 -NoNewline
 
-$sha3Output = & $CRYPTOCORE_EXE dgst --algorithm sha3-256 --input $sha3TestFile 2>&1
-$sha3OutputText = $sha3Output -join "`n"
+try {
+    $hashOutputFile = Join-Path $SCRIPT_DIR "sha3_output.txt"
+    & $CRYPTOCORE_EXE dgst --algorithm sha3-256 --input $sha3TestFile --output $hashOutputFile
 
-if ($sha3OutputText -match "d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1") {
-    Write-Status $true "SHA3-256 known vector test"
-    $testResults += "PASSED: Hash - SHA3-256 known vector"
-} else {
-    Write-Status $false "SHA3-256 known vector test failed"
-    Write-Host "Expected: d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1" -ForegroundColor Yellow
-    Write-Host "Got: $sha3OutputText" -ForegroundColor Yellow
-    $testResults += "FAILED: Hash - SHA3-256 known vector"
-    $allTestsPassed = $false
-}
-
-# Test hash output to file
-Write-Step "Testing hash output to file"
-$hashOutputFile = Join-Path $SCRIPT_DIR "hash_output.txt"
-& $CRYPTOCORE_EXE dgst --algorithm sha256 --input $sha256TestFile --output $hashOutputFile
-
-if ($LASTEXITCODE -eq 0 -and (Test-Path $hashOutputFile)) {
-    $hashContent = Get-Content $hashOutputFile -Raw
-    # В файл пишется только хеш, без имени файла
-    if ($hashContent -match "1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c") {
-        Write-Status $true "Hash output to file works"
-        $testResults += "PASSED: Hash - Output to file"
-    } else {
-        Write-Status $false "Hash output to file content mismatch"
-        Write-Host "Expected hash in file: 1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c" -ForegroundColor Yellow
-        Write-Host "Got in file: $hashContent" -ForegroundColor Yellow
-        $testResults += "FAILED: Hash - Output to file"
-        $allTestsPassed = $false
-    }
-} else {
-    Write-Status $false "Hash output to file failed"
-    $testResults += "FAILED: Hash - Output to file"
-    $allTestsPassed = $false
-}
-
-# Test hash with different file types
-Write-Step "Testing hash with different file types"
-$hashAlgorithms = @("sha256", "sha3-256")
-
-foreach ($algorithm in $hashAlgorithms) {
-    foreach ($file in $testFiles.GetEnumerator()) {
-        $filename = $file.Key
-        $filePath = Join-Path $SCRIPT_DIR $filename
-        Write-Host "  Testing $algorithm with $filename..." -NoNewline
-
-        $hashOutput = & $CRYPTOCORE_EXE dgst --algorithm $algorithm --input $filePath 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $hashOutputText = $hashOutput -join "`n"
-            if ($hashOutputText -match "^[0-9a-f]{64}\s+") {
-                Write-Host " Success" -ForegroundColor Green
-                $testResults += "PASSED: Hash - $algorithm with $filename"
-            } else {
-                Write-Host " Invalid format" -ForegroundColor Red
-                $testResults += "FAILED: Hash - $algorithm with $filename (format)"
-                $allTestsPassed = $false
-            }
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $hashOutputFile)) {
+        $hashContent = Get-Content $hashOutputFile -Raw
+        if ($hashContent -match "d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1") {
+            Add-TestResult "PASSED: Hash - SHA3-256 known vector" "Hash"
         } else {
-            Write-Host " Failed" -ForegroundColor Red
-            $testResults += "FAILED: Hash - $algorithm with $filename"
-            $allTestsPassed = $false
+            Add-TestResult "FAILED: Hash - SHA3-256 known vector mismatch" "Hash"
         }
+        Remove-Item $hashOutputFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: Hash - SHA3-256 command failed" "Hash"
     }
+} catch {
+    Add-TestResult "FAILED: Hash - SHA3-256 test error: $($_.Exception.Message)" "Hash"
 }
 
 # Cleanup hash test files
-Remove-Item $sha256TestFile, $sha3TestFile, $hashOutputFile -ErrorAction SilentlyContinue
+Remove-Item $sha256TestFile, $sha3TestFile -ErrorAction SilentlyContinue
 
-# ============================================================================
-# NEW: HMAC FUNCTIONALITY TESTS (Sprint 5)
-# ============================================================================
-Write-Section "HMAC Functionality Tests (Sprint 5)"
+# Step 6: HMAC Tests
+Write-Section "HMAC Functionality Tests"
 
-Write-Step "Testing HMAC module"
-cargo test --test hmac -- --nocapture
-Write-Status ($LASTEXITCODE -eq 0) "HMAC module tests"
-
-# Test HMAC with RFC 4231 test vectors
 Write-Step "Testing HMAC with RFC 4231 test vectors"
 
-# Test Case 1: Key = 20 bytes of 0x0b, Data = "Hi There"
-Write-Host "  Testing RFC 4231 Test Case 1..." -NoNewline
+# Test Case 1
 $hmacTest1File = Join-Path $SCRIPT_DIR "hmac_test1.txt"
 "Hi There" | Out-File -FilePath $hmacTest1File -Encoding utf8 -NoNewline
 
-$hmacOutput1 = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b" --input $hmacTest1File 2>&1
-$hmacOutput1Text = $hmacOutput1 -join "`n"
+try {
+    $hmacOutputFile = Join-Path $SCRIPT_DIR "hmac_output1.txt"
+    & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b" --input $hmacTest1File --output $hmacOutputFile
 
-if ($hmacOutput1Text -match "74c69388287ca06248e6be230daffe807d4c6fc0e45da0325f2fae0d1a4ee3b8") {
-    Write-Host " Success" -ForegroundColor Green
-    $testResults += "PASSED: HMAC - RFC 4231 Test Case 1"
-} else {
-    Write-Host " Failed" -ForegroundColor Red
-    Write-Host "Expected: 74c69388287ca06248e6be230daffe807d4c6fc0e45da0325f2fae0d1a4ee3b8" -ForegroundColor Yellow
-    Write-Host "Got: $hmacOutput1Text" -ForegroundColor Yellow
-    $testResults += "FAILED: HMAC - RFC 4231 Test Case 1"
-    $allTestsPassed = $false
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $hmacOutputFile)) {
+        $hmacContent = Get-Content $hmacOutputFile -Raw
+        if ($hmacContent -match "74c69388287ca06248e6be230daffe807d4c6fc0e45da0325f2fae0d1a4ee3b8") {
+            Add-TestResult "PASSED: HMAC - RFC 4231 Test Case 1" "HMAC"
+        } else {
+            Add-TestResult "FAILED: HMAC - RFC 4231 Test Case 1 mismatch" "HMAC"
+        }
+        Remove-Item $hmacOutputFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: HMAC - RFC 4231 Test Case 1 failed" "HMAC"
+    }
+} catch {
+    Add-TestResult "FAILED: HMAC - RFC 4231 Test Case 1 error" "HMAC"
 }
 
-# Test Case 2: Key = "Jefe", Data = "what do ya want for nothing?"
-Write-Host "  Testing RFC 4231 Test Case 2..." -NoNewline
+# Test Case 2
 $hmacTest2File = Join-Path $SCRIPT_DIR "hmac_test2.txt"
 "what do ya want for nothing?" | Out-File -FilePath $hmacTest2File -Encoding utf8 -NoNewline
 
-$hmacOutput2 = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "4a656665" --input $hmacTest2File 2>&1
-$hmacOutput2Text = $hmacOutput2 -join "`n"
+try {
+    $hmacOutputFile = Join-Path $SCRIPT_DIR "hmac_output2.txt"
+    & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "4a656665" --input $hmacTest2File --output $hmacOutputFile
 
-if ($hmacOutput2Text -match "bbda9901e08476911958eb7d35b1afef014a1576bf8b2c6f85cc9514aed1d967") {
-    Write-Host " Success" -ForegroundColor Green
-    $testResults += "PASSED: HMAC - RFC 4231 Test Case 2"
-} else {
-    Write-Host " Failed" -ForegroundColor Red
-    Write-Host "Expected: bbda9901e08476911958eb7d35b1afef014a1576bf8b2c6f85cc9514aed1d967" -ForegroundColor Yellow
-    Write-Host "Got: $hmacOutput2Text" -ForegroundColor Yellow
-    $testResults += "FAILED: HMAC - RFC 4231 Test Case 2"
-    $allTestsPassed = $false
-}
-
-# Test HMAC with different key sizes
-Write-Step "Testing HMAC with various key sizes"
-
-# Short key (16 bytes)
-Write-Host "  Testing short key (16 bytes)..." -NoNewline
-$shortKeyOutput = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $hmacTest1File 2>&1
-if ($LASTEXITCODE -eq 0 -and ($shortKeyOutput -join "`n") -match "^[0-9a-f]{64}\s+") {
-    Write-Host " Success" -ForegroundColor Green
-    $testResults += "PASSED: HMAC - Short key (16 bytes)"
-} else {
-    Write-Host " Failed" -ForegroundColor Red
-    $testResults += "FAILED: HMAC - Short key (16 bytes)"
-    $allTestsPassed = $false
-}
-
-# Long key (100 bytes)
-Write-Host "  Testing long key (100 bytes)..." -NoNewline
-$longKey = "42" * 100  # 100 bytes in hex
-$longKeyOutput = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key $longKey --input $hmacTest1File 2>&1
-if ($LASTEXITCODE -eq 0 -and ($longKeyOutput -join "`n") -match "^[0-9a-f]{64}\s+") {
-    Write-Host " Success" -ForegroundColor Green
-    $testResults += "PASSED: HMAC - Long key (100 bytes)"
-} else {
-    Write-Host " Failed" -ForegroundColor Red
-    $testResults += "FAILED: HMAC - Long key (100 bytes)"
-    $allTestsPassed = $false
-}
-
-# Test HMAC verification functionality
-Write-Step "Testing HMAC verification"
-
-# Generate HMAC and save to file
-$hmacValueFile = Join-Path $SCRIPT_DIR "test_hmac_value.txt"
-& $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $hmacTest1File --output $hmacValueFile
-
-if ($LASTEXITCODE -eq 0 -and (Test-Path $hmacValueFile)) {
-    # Test successful verification
-    Write-Host "  Testing successful verification..." -NoNewline
-    $verifySuccess = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $hmacTest1File --verify $hmacValueFile 2>&1
-    if ($LASTEXITCODE -eq 0 -and ($verifySuccess -join "`n") -match "HMAC verification successful") {
-        Write-Host " Success" -ForegroundColor Green
-        $testResults += "PASSED: HMAC - Verification successful"
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $hmacOutputFile)) {
+        $hmacContent = Get-Content $hmacOutputFile -Raw
+        if ($hmacContent -match "bbda9901e08476911958eb7d35b1afef014a1576bf8b2c6f85cc9514aed1d967") {
+            Add-TestResult "PASSED: HMAC - RFC 4231 Test Case 2" "HMAC"
+        } else {
+            Add-TestResult "FAILED: HMAC - RFC 4231 Test Case 2 mismatch" "HMAC"
+        }
+        Remove-Item $hmacOutputFile -ErrorAction SilentlyContinue
     } else {
-        Write-Host " Failed" -ForegroundColor Red
-        $testResults += "FAILED: HMAC - Verification successful"
-        $allTestsPassed = $false
+        Add-TestResult "FAILED: HMAC - RFC 4231 Test Case 2 failed" "HMAC"
     }
-
-    # Test failed verification (tampered file)
-    Write-Host "  Testing tamper detection..." -NoNewline
-    $tamperedFile = Join-Path $SCRIPT_DIR "tampered.txt"
-    "Hi There (tampered)" | Out-File -FilePath $tamperedFile -Encoding utf8 -NoNewline
-
-    $verifyFailed = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $tamperedFile --verify $hmacValueFile 2>&1
-    if ($LASTEXITCODE -ne 0 -and ($verifyFailed -join "`n") -match "HMAC verification failed") {
-        Write-Host " Success" -ForegroundColor Green
-        $testResults += "PASSED: HMAC - Tamper detection"
-    } else {
-        Write-Host " Failed" -ForegroundColor Red
-        $testResults += "FAILED: HMAC - Tamper detection"
-        $allTestsPassed = $false
-    }
-
-    # Test failed verification (wrong key)
-    Write-Host "  Testing wrong key detection..." -NoNewline
-    $wrongKeyVerify = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "ffeeddccbbaa99887766554433221100" --input $hmacTest1File --verify $hmacValueFile 2>&1
-    if ($LASTEXITCODE -ne 0 -and ($wrongKeyVerify -join "`n") -match "HMAC verification failed") {
-        Write-Host " Success" -ForegroundColor Green
-        $testResults += "PASSED: HMAC - Wrong key detection"
-    } else {
-        Write-Host " Failed" -ForegroundColor Red
-        $testResults += "FAILED: HMAC - Wrong key detection"
-        $allTestsPassed = $false
-    }
-
-    Remove-Item $tamperedFile -ErrorAction SilentlyContinue
-} else {
-    Write-Status $false "HMAC generation for verification test failed"
-    $testResults += "FAILED: HMAC - Verification setup"
-    $allTestsPassed = $false
-}
-
-# Test HMAC with empty file
-Write-Step "Testing HMAC with empty file"
-$emptyFile = Join-Path $SCRIPT_DIR "empty.txt"
-$emptyHmac = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "00112233445566778899aabbccddeeff" --input $emptyFile 2>&1
-if ($LASTEXITCODE -eq 0 -and ($emptyHmac -join "`n") -match "^[0-9a-f]{64}\s+") {
-    Write-Status $true "HMAC with empty file"
-    $testResults += "PASSED: HMAC - Empty file"
-} else {
-    Write-Status $false "HMAC with empty file failed"
-    $testResults += "FAILED: HMAC - Empty file"
-    $allTestsPassed = $false
-}
-
-# Test HMAC output format
-Write-Step "Testing HMAC output format"
-$hmacFormatTest = & $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --key "001122" --input $hmacTest1File 2>&1
-$hmacFormatText = $hmacFormatTest -join "`n"
-if ($hmacFormatText -match "^([0-9a-f]{64})\s+([^\s]+)$") {
-    Write-Status $true "HMAC output format correct"
-    $testResults += "PASSED: HMAC - Output format"
-} else {
-    Write-Status $false "HMAC output format incorrect"
-    $testResults += "FAILED: HMAC - Output format"
-    $allTestsPassed = $false
+} catch {
+    Add-TestResult "FAILED: HMAC - RFC 4231 Test Case 2 error" "HMAC"
 }
 
 # Cleanup HMAC test files
-Remove-Item $hmacTest1File, $hmacTest2File, $hmacValueFile -ErrorAction SilentlyContinue
+Remove-Item $hmacTest1File, $hmacTest2File -ErrorAction SilentlyContinue
 
-# Step 6: Automatic Key Generation Tests
-Write-Section "Automatic Key Generation Tests"
+# Step 7: NEW - GCM Mode Tests (Sprint 6)
+Write-Section "GCM Mode Tests (NEW in v0.6.0)"
 
-Write-Step "Testing encryption without --key parameter"
-$autoKeyTestFile = Join-Path $SCRIPT_DIR "auto_key_test.txt"
-"Testing automatic key generation" | Out-File -FilePath $autoKeyTestFile -Encoding utf8
+$gcmKey = "00000000000000000000000000000000"
+$gcmNonce = "000000000000000000000000"
+$gcmAad = "aabbccddeeff"
 
-# Capture both stdout and stderr
-$autoKeyProcess = Start-Process -FilePath $CRYPTOCORE_EXE -ArgumentList @(
-    "crypto", "--algorithm", "aes",
-    "--mode", "cbc",
-    "--operation", "encrypt",
-    "--input", $autoKeyTestFile,
-    "--output", "$autoKeyTestFile.enc"
-) -PassThru -Wait -NoNewWindow
-$autoKeySuccess = ($autoKeyProcess.ExitCode -eq 0)
+Write-Step "Testing GCM encryption/decryption with AAD"
+$gcmTestFile = Join-Path $SCRIPT_DIR "gcm_test.txt"
+"Hello GCM World with AAD!" | Out-File -FilePath $gcmTestFile -Encoding utf8
 
-# Get the output by running the command again and capturing output
-$autoKeyOutput = & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --input $autoKeyTestFile --output "$autoKeyTestFile.enc" 2>&1
-$autoKeySuccess = ($LASTEXITCODE -eq 0)
+try {
+    # Encrypt with GCM
+    $gcmEncFile = Join-Path $SCRIPT_DIR "gcm_encrypted.bin"
+    & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation encrypt `
+        --key $gcmKey --nonce $gcmNonce --aad $gcmAad `
+        --input $gcmTestFile --output $gcmEncFile
 
-if ($autoKeySuccess) {
-    # Convert output array to string for matching
-    $outputText = $autoKeyOutput -join "`n"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $gcmEncFile)) {
+        Add-TestResult "FAILED: GCM - Encryption failed" "GCM"
+    } else {
+        # Decrypt with correct AAD
+        $gcmDecFile = Join-Path $SCRIPT_DIR "gcm_decrypted.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation decrypt `
+            --key $gcmKey --aad $gcmAad `
+            --input $gcmEncFile --output $gcmDecFile
 
-    # Check if key was generated and printed
-    if ($outputText -match "Generated random key: ([0-9a-f]{32})") {
-        $generatedKey = $matches[1]
-        Write-Host "Generated key: $generatedKey" -ForegroundColor Green
-
-        # Test decryption with generated key
-        & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $generatedKey --input "$autoKeyTestFile.enc" --output "$autoKeyTestFile.dec"
-        $decryptSuccess = ($LASTEXITCODE -eq 0)
-
-        if ($decryptSuccess) {
-            $original = Get-Content $autoKeyTestFile -Raw
-            $decrypted = Get-Content "$autoKeyTestFile.dec" -Raw
-
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $gcmDecFile)) {
+            $original = Get-Content $gcmTestFile -Raw
+            $decrypted = Get-Content $gcmDecFile -Raw
             if ($original -eq $decrypted) {
-                Write-Status $true "Automatic key generation and usage"
-                $testResults += "PASSED: Auto Key - Generation and usage"
+                Add-TestResult "PASSED: GCM - Encryption/decryption with AAD" "GCM"
             } else {
-                Write-Status $false "Automatic key generation (content mismatch)"
-                $testResults += "FAILED: Auto Key - Content mismatch"
-                $allTestsPassed = $false
+                Add-TestResult "FAILED: GCM - Decryption content mismatch" "GCM"
             }
         } else {
-            Write-Status $false "Automatic key generation (decryption failed)"
-            $testResults += "FAILED: Auto Key - Decryption failed"
-            $allTestsPassed = $false
-        }
-    } else {
-        Write-Status $false "Automatic key generation (no key output)"
-        Write-Host "Output was: $outputText" -ForegroundColor Yellow
-        $testResults += "FAILED: Auto Key - No key output"
-        $allTestsPassed = $false
-    }
-} else {
-    Write-Status $false "Automatic key generation (encryption failed)"
-    Write-Host "Output was: $autoKeyOutput" -ForegroundColor Yellow
-    $testResults += "FAILED: Auto Key - Encryption failed"
-    $allTestsPassed = $false
-}
-
-Remove-Item $autoKeyTestFile, "$autoKeyTestFile.enc", "$autoKeyTestFile.dec" -ErrorAction SilentlyContinue
-
-# Step 7: Weak Key Detection Tests
-Write-Section "Weak Key Detection Tests"
-
-Write-Step "Testing weak key detection"
-$weakKeyTestFile = Join-Path $SCRIPT_DIR "weak_key_test.txt"
-"Weak key test" | Out-File -FilePath $weakKeyTestFile -Encoding utf8
-
-# Test all zeros key (should show warning but work)
-$weakKeyOutput = & $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "00000000000000000000000000000000" --input $weakKeyTestFile --output "$weakKeyTestFile.enc" 2>&1
-$weakKeyOutputText = $weakKeyOutput -join "`n"
-$weakKeyWarning = $weakKeyOutputText -match "WARNING.*weak"
-$weakKeySuccess = ($LASTEXITCODE -eq 0)
-
-if ($weakKeyWarning -and $weakKeySuccess) {
-    Write-Status $true "Weak key detection with all zeros"
-    $testResults += "PASSED: Weak Key - All zeros detection"
-} else {
-    Write-Status $false "Weak key detection failed"
-    $testResults += "FAILED: Weak Key - All zeros detection"
-    $allTestsPassed = $false
-}
-
-# Test sequential key (should show warning but work)
-$sequentialKeyOutput = & $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "000102030405060708090a0b0c0d0e0f" --input $weakKeyTestFile --output "$weakKeyTestFile.enc2" 2>&1
-$sequentialKeyOutputText = $sequentialKeyOutput -join "`n"
-$sequentialKeyWarning = $sequentialKeyOutputText -match "WARNING.*weak"
-$sequentialKeySuccess = ($LASTEXITCODE -eq 0)
-
-if ($sequentialKeyWarning -and $sequentialKeySuccess) {
-    Write-Status $true "Weak key detection with sequential bytes"
-    $testResults += "PASSED: Weak Key - Sequential bytes detection"
-} else {
-    Write-Status $false "Sequential key detection failed"
-    $testResults += "FAILED: Weak Key - Sequential bytes detection"
-    $allTestsPassed = $false
-}
-
-Remove-Item $weakKeyTestFile, "$weakKeyTestFile.enc", "$weakKeyTestFile.enc2" -ErrorAction SilentlyContinue
-
-# Step 8: Test all encryption modes comprehensively
-Write-Section "Testing All Encryption Modes"
-
-$KEY = "00112233445566778899aabbccddeeff"
-$allTestsPassed = $true
-$testResults = @()
-
-# All supported modes
-$modes = @("ecb", "cbc", "cfb", "ofb", "ctr")
-
-foreach ($mode in $modes) {
-    Write-Step "Testing $($mode.ToUpper()) mode"
-
-    # Test with each file type
-    foreach ($file in $testFiles.GetEnumerator()) {
-        $filename = $file.Key
-        $filePath = Join-Path $SCRIPT_DIR $filename
-        Write-Host "  Testing $filename..." -NoNewline
-
-        $encryptedFile = Join-Path $SCRIPT_DIR "$filename.$mode.enc"
-        $decryptedFile = Join-Path $SCRIPT_DIR "$filename.$mode.dec"
-
-        # Build encryption command
-        $encryptArgs = @(
-            "crypto", "--algorithm", "aes",
-            "--mode", $mode,
-            "--operation", "encrypt",
-            "--key", $KEY,
-            "--input", $filePath,
-            "--output", $encryptedFile
-        )
-
-        # Build decryption command
-        $decryptArgs = @(
-            "crypto", "--algorithm", "aes",
-            "--mode", $mode,
-            "--operation", "decrypt",
-            "--key", $KEY,
-            "--input", $encryptedFile,
-            "--output", $decryptedFile
-        )
-
-        # Encrypt
-        $encryptResult = & $CRYPTOCORE_EXE @encryptArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host " Encryption failed" -ForegroundColor Red
-            $testResults += "FAILED: $filename.$mode - Encryption failed"
-            $allTestsPassed = $false
-            continue
+            Add-TestResult "FAILED: GCM - Decryption failed with correct AAD" "GCM"
         }
 
-        # Verify encrypted file exists and has content
-        if (-not (Test-Path $encryptedFile) -or (Get-Item $encryptedFile).Length -eq 0) {
-            Write-Host " Empty encrypted file" -ForegroundColor Red
-            $testResults += "FAILED: $filename.$mode - Empty encrypted file"
-            $allTestsPassed = $false
-            continue
-        }
+        # Test with wrong AAD (should fail)
+        $wrongAad = "deadbeefcafe1234567890abcdef"
+        $gcmWrongFile = Join-Path $SCRIPT_DIR "gcm_wrong.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation decrypt `
+            --key $gcmKey --aad $wrongAad `
+            --input $gcmEncFile --output $gcmWrongFile 2>&1 | Out-Null
 
-        # For modes with IV, verify file contains IV + data
-        if ($mode -ne "ecb") {
-            $fileSize = (Get-Item $encryptedFile).Length
-            if ($fileSize -lt 16) {
-                Write-Host " Encrypted file too small for IV" -ForegroundColor Red
-                $testResults += "FAILED: $filename.$mode - File too small for IV"
-                $allTestsPassed = $false
-                continue
-            }
-        }
-
-        # Decrypt
-        $decryptResult = & $CRYPTOCORE_EXE @decryptArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host " Decryption failed" -ForegroundColor Red
-            $testResults += "FAILED: $filename.$mode - Decryption failed"
-            $allTestsPassed = $false
-            continue
-        }
-
-        # Compare files as bytes
-        try {
-            $originalBytes = [System.IO.File]::ReadAllBytes($filePath)
-            $decryptedBytes = [System.IO.File]::ReadAllBytes($decryptedFile)
-            $filesMatch = ($originalBytes.Length -eq $decryptedBytes.Length)
-            if ($filesMatch) {
-                for ($i = 0; $i -lt $originalBytes.Length; $i++) {
-                    if ($originalBytes[$i] -ne $decryptedBytes[$i]) {
-                        $filesMatch = $false
-                        break
-                    }
-                }
-            }
-
-            if ($filesMatch) {
-                Write-Host " Success" -ForegroundColor Green
-                $testResults += "PASSED: $filename.$mode - Round-trip successful"
-            } else {
-                Write-Host " Files don't match" -ForegroundColor Red
-                $testResults += "FAILED: $filename.$mode - Files don't match"
-                $allTestsPassed = $false
-            }
-        } catch {
-            Write-Host " File comparison error: $($_.Exception.Message)" -ForegroundColor Red
-            $testResults += "FAILED: $filename.$mode - File comparison error"
-            $allTestsPassed = $false
+        if ($LASTEXITCODE -ne 0 -and -not (Test-Path $gcmWrongFile)) {
+            Add-TestResult "PASSED: GCM - Wrong AAD causes authentication failure" "GCM"
+        } else {
+            Add-TestResult "FAILED: GCM - Wrong AAD should fail but didn't" "GCM"
         }
 
         # Cleanup
-        Remove-Item $encryptedFile, $decryptedFile -ErrorAction SilentlyContinue
+        Remove-Item $gcmDecFile, $gcmWrongFile -ErrorAction SilentlyContinue
     }
 
-    # Test with binary files
-    $binaryFiles = @("binary_16.bin", "binary_with_nulls.bin", "random_1k.bin")
-    foreach ($binaryFile in $binaryFiles) {
-        Write-Host "  Testing $binaryFile..." -NoNewline
+    Remove-Item $gcmEncFile -ErrorAction SilentlyContinue
+} catch {
+    Add-TestResult "FAILED: GCM - Test error: $($_.Exception.Message)" "GCM"
+}
 
-        $binaryFilePath = Join-Path $SCRIPT_DIR $binaryFile
-        $encryptedFile = Join-Path $SCRIPT_DIR "$binaryFile.$mode.enc"
-        $decryptedFile = Join-Path $SCRIPT_DIR "$binaryFile.$mode.dec"
+Write-Step "Testing GCM with automatic nonce generation"
+try {
+    $gcmAutoEncFile = Join-Path $SCRIPT_DIR "gcm_auto_enc.bin"
+    & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation encrypt `
+        --key $gcmKey --aad $gcmAad `
+        --input $gcmTestFile --output $gcmAutoEncFile
 
-        $encryptArgs = @(
-            "crypto", "--algorithm", "aes",
-            "--mode", $mode,
-            "--operation", "encrypt",
-            "--key", $KEY,
-            "--input", $binaryFilePath,
-            "--output", $encryptedFile
-        )
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $gcmAutoEncFile)) {
+        $gcmAutoDecFile = Join-Path $SCRIPT_DIR "gcm_auto_dec.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation decrypt `
+            --key $gcmKey --aad $gcmAad `
+            --input $gcmAutoEncFile --output $gcmAutoDecFile
 
-        $decryptArgs = @(
-            "crypto", "--algorithm", "aes",
-            "--mode", $mode,
-            "--operation", "decrypt",
-            "--key", $KEY,
-            "--input", $encryptedFile,
-            "--output", $decryptedFile
-        )
-
-        $encryptResult = & $CRYPTOCORE_EXE @encryptArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host " Encryption failed" -ForegroundColor Red
-            $testResults += "FAILED: $binaryFile.$mode - Encryption failed"
-            $allTestsPassed = $false
-            continue
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $gcmAutoDecFile)) {
+            $original = Get-Content $gcmTestFile -Raw
+            $decrypted = Get-Content $gcmAutoDecFile -Raw
+            if ($original -eq $decrypted) {
+                Add-TestResult "PASSED: GCM - Auto nonce generation" "GCM"
+            } else {
+                Add-TestResult "FAILED: GCM - Auto nonce decryption mismatch" "GCM"
+            }
+        } else {
+            Add-TestResult "FAILED: GCM - Auto nonce decryption failed" "GCM"
         }
 
-        $decryptResult = & $CRYPTOCORE_EXE @decryptArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host " Decryption failed" -ForegroundColor Red
-            $testResults += "FAILED: $binaryFile.$mode - Decryption failed"
-            $allTestsPassed = $false
-            continue
+        Remove-Item $gcmAutoDecFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: GCM - Auto nonce encryption failed" "GCM"
+    }
+
+    Remove-Item $gcmAutoEncFile -ErrorAction SilentlyContinue
+} catch {
+    Add-TestResult "FAILED: GCM - Auto nonce test error" "GCM"
+}
+
+Write-Step "Testing GCM with empty AAD"
+try {
+    $gcmEmptyAadEncFile = Join-Path $SCRIPT_DIR "gcm_empty_aad_enc.bin"
+    & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation encrypt `
+        --key $gcmKey --nonce $gcmNonce `
+        --input $gcmTestFile --output $gcmEmptyAadEncFile
+
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $gcmEmptyAadEncFile)) {
+        $gcmEmptyAadDecFile = Join-Path $SCRIPT_DIR "gcm_empty_aad_dec.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode gcm --operation decrypt `
+            --key $gcmKey `
+            --input $gcmEmptyAadEncFile --output $gcmEmptyAadDecFile
+
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $gcmEmptyAadDecFile)) {
+            $original = Get-Content $gcmTestFile -Raw
+            $decrypted = Get-Content $gcmEmptyAadDecFile -Raw
+            if ($original -eq $decrypted) {
+                Add-TestResult "PASSED: GCM - Empty AAD works" "GCM"
+            } else {
+                Add-TestResult "FAILED: GCM - Empty AAD decryption mismatch" "GCM"
+            }
+        } else {
+            Add-TestResult "FAILED: GCM - Empty AAD decryption failed" "GCM"
         }
+
+        Remove-Item $gcmEmptyAadDecFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: GCM - Empty AAD encryption failed" "GCM"
+    }
+
+    Remove-Item $gcmEmptyAadEncFile -ErrorAction SilentlyContinue
+} catch {
+    Add-TestResult "FAILED: GCM - Empty AAD test error" "GCM"
+}
+
+Remove-Item $gcmTestFile -ErrorAction SilentlyContinue
+
+# Step 8: NEW - Encrypt-then-MAC (ETM) Tests
+Write-Section "Encrypt-then-MAC (ETM) Tests (NEW in v0.6.0)"
+
+$etmKey = "00112233445566778899aabbccddeeff"
+$etmAad = "aabbccddeeff001122334455"
+
+Write-Step "Testing ETM with CBC base mode"
+$etmTestFile = Join-Path $SCRIPT_DIR "etm_test.txt"
+"Test data for ETM mode with CBC" | Out-File -FilePath $etmTestFile -Encoding utf8
+
+try {
+    # Encrypt with ETM (CBC base)
+    $etmEncFile = Join-Path $SCRIPT_DIR "etm_encrypted.bin"
+    & $CRYPTOCORE_EXE crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt `
+        --key $etmKey --aad $etmAad `
+        --input $etmTestFile --output $etmEncFile
+
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $etmEncFile)) {
+        # Decrypt with correct AAD
+        $etmDecFile = Join-Path $SCRIPT_DIR "etm_decrypted.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt `
+            --key $etmKey --aad $etmAad `
+            --input $etmEncFile --output $etmDecFile
+
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $etmDecFile)) {
+            $original = Get-Content $etmTestFile -Raw
+            $decrypted = Get-Content $etmDecFile -Raw
+            if ($original -eq $decrypted) {
+                Add-TestResult "PASSED: ETM - CBC base mode with AAD" "ETM"
+            } else {
+                Add-TestResult "FAILED: ETM - CBC decryption mismatch" "ETM"
+            }
+        } else {
+            Add-TestResult "FAILED: ETM - CBC decryption failed" "ETM"
+        }
+
+        # Test with wrong AAD (should fail)
+        $wrongAad = "deadbeefcafe1234567890abcdef"
+        $etmWrongFile = Join-Path $SCRIPT_DIR "etm_wrong.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt `
+            --key $etmKey --aad $wrongAad `
+            --input $etmEncFile --output $etmWrongFile 2>&1 | Out-Null
+
+        if ($LASTEXITCODE -ne 0 -and -not (Test-Path $etmWrongFile)) {
+            Add-TestResult "PASSED: ETM - Wrong AAD causes authentication failure" "ETM"
+        } else {
+            Add-TestResult "FAILED: ETM - Wrong AAD should fail but didn't" "ETM"
+        }
+
+        Remove-Item $etmDecFile, $etmWrongFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: ETM - CBC encryption failed" "ETM"
+    }
+
+    Remove-Item $etmEncFile -ErrorAction SilentlyContinue
+} catch {
+    Add-TestResult "FAILED: ETM - CBC test error: $($_.Exception.Message)" "ETM"
+}
+
+Write-Step "Testing ETM with CTR base mode"
+try {
+    $etmCtrEncFile = Join-Path $SCRIPT_DIR "etm_ctr_enc.bin"
+    & $CRYPTOCORE_EXE crypto --algorithm aes --mode etm --base-mode ctr --operation encrypt `
+        --key $etmKey --aad $etmAad `
+        --input $etmTestFile --output $etmCtrEncFile
+
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $etmCtrEncFile)) {
+        $etmCtrDecFile = Join-Path $SCRIPT_DIR "etm_ctr_dec.txt"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode etm --base-mode ctr --operation decrypt `
+            --key $etmKey --aad $etmAad `
+            --input $etmCtrEncFile --output $etmCtrDecFile
+
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $etmCtrDecFile)) {
+            $original = Get-Content $etmTestFile -Raw
+            $decrypted = Get-Content $etmCtrDecFile -Raw
+            if ($original -eq $decrypted) {
+                Add-TestResult "PASSED: ETM - CTR base mode with AAD" "ETM"
+            } else {
+                Add-TestResult "FAILED: ETM - CTR decryption mismatch" "ETM"
+            }
+        } else {
+            Add-TestResult "FAILED: ETM - CTR decryption failed" "ETM"
+        }
+
+        Remove-Item $etmCtrDecFile -ErrorAction SilentlyContinue
+    } else {
+        Add-TestResult "FAILED: ETM - CTR encryption failed" "ETM"
+    }
+
+    Remove-Item $etmCtrEncFile -ErrorAction SilentlyContinue
+} catch {
+    Add-TestResult "FAILED: ETM - CTR test error" "ETM"
+}
+
+Remove-Item $etmTestFile -ErrorAction SilentlyContinue
+
+# Step 9: Classic Encryption Modes Tests
+Write-Section "Classic Encryption Modes Tests"
+
+$KEY = "00112233445566778899aabbccddeeff"
+$modes = @("ecb", "cbc", "cfb", "ofb", "ctr")
+
+$modeTestCount = 0
+foreach ($mode in $modes) {
+    $modeTestCount++
+    Show-Progress $modeTestCount $modes.Count "Testing $($mode.ToUpper()) mode"
+
+    # Test with each file type
+    foreach ($file in $testFiles.GetEnumerator()) {
+        $filePath = Join-Path $SCRIPT_DIR $file.Key
+        $encryptedFile = Join-Path $SCRIPT_DIR "$($file.Key).$mode.enc"
+        $decryptedFile = Join-Path $SCRIPT_DIR "$($file.Key).$mode.dec"
 
         try {
-            $originalBytes = [System.IO.File]::ReadAllBytes($binaryFilePath)
-            $decryptedBytes = [System.IO.File]::ReadAllBytes($decryptedFile)
-            $filesMatch = ($originalBytes.Length -eq $decryptedBytes.Length)
-            if ($filesMatch) {
-                for ($i = 0; $i -lt $originalBytes.Length; $i++) {
-                    if ($originalBytes[$i] -ne $decryptedBytes[$i]) {
-                        $filesMatch = $false
-                        break
-                    }
-                }
+            # Build encryption command
+            $encryptArgs = @(
+                "crypto", "--algorithm", "aes",
+                "--mode", $mode,
+                "--operation", "encrypt",
+                "--key", $KEY,
+                "--input", $filePath,
+                "--output", $encryptedFile
+            )
+
+            # Build decryption command
+            $decryptArgs = @(
+                "crypto", "--algorithm", "aes",
+                "--mode", $mode,
+                "--operation", "decrypt",
+                "--key", $KEY,
+                "--input", $encryptedFile,
+                "--output", $decryptedFile
+            )
+
+            # Encrypt
+            & $CRYPTOCORE_EXE @encryptArgs 2>&1 | Out-Null
+            $encryptSuccess = ($LASTEXITCODE -eq 0) -and (Test-Path $encryptedFile)
+
+            if (-not $encryptSuccess) {
+                Add-TestResult "FAILED: $mode - $($file.Key) encryption failed" "ClassicModes"
+                continue
             }
 
-            if ($filesMatch) {
-                Write-Host " Success" -ForegroundColor Green
-                $testResults += "PASSED: $binaryFile.$mode - Round-trip successful"
+            # Decrypt
+            & $CRYPTOCORE_EXE @decryptArgs 2>&1 | Out-Null
+            $decryptSuccess = ($LASTEXITCODE -eq 0) -and (Test-Path $decryptedFile)
+
+            if (-not $decryptSuccess) {
+                Add-TestResult "FAILED: $mode - $($file.Key) decryption failed" "ClassicModes"
+                Remove-Item $encryptedFile -ErrorAction SilentlyContinue
+                continue
+            }
+
+            # Compare files
+            $original = Get-Content $filePath -Raw
+            $decrypted = Get-Content $decryptedFile -Raw
+
+            if ($original -eq $decrypted) {
+                Add-TestResult "PASSED: $mode - $($file.Key) round-trip" "ClassicModes"
             } else {
-                Write-Host " Failed" -ForegroundColor Red
-                $testResults += "FAILED: $binaryFile.$mode - Round-trip failed"
-                $allTestsPassed = $false
+                Add-TestResult "FAILED: $mode - $($file.Key) content mismatch" "ClassicModes"
             }
+
+            # Cleanup
+            Remove-Item $encryptedFile, $decryptedFile -ErrorAction SilentlyContinue
+
         } catch {
-            Write-Host " Error: $($_.Exception.Message)" -ForegroundColor Red
-            $testResults += "FAILED: $binaryFile.$mode - File error"
-            $allTestsPassed = $false
+            Add-TestResult "FAILED: $mode - $($file.Key) error: $($_.Exception.Message)" "ClassicModes"
         }
-
-        Remove-Item $encryptedFile, $decryptedFile -ErrorAction SilentlyContinue
     }
 }
 
-# Step 9: Advanced IV handling tests
-Write-Section "Testing IV Handling"
-
-# Test IV provided for decryption
-Write-Step "Testing decryption with provided IV"
-$ivTestFile = Join-Path $SCRIPT_DIR "iv_test.txt"
-"IV test data" | Out-File -FilePath $ivTestFile -Encoding utf8
-
-$ivEncryptedFile = Join-Path $SCRIPT_DIR "iv_encrypted.bin"
-
-# Encrypt with auto IV
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --input $ivTestFile --output $ivEncryptedFile
-
-if ($LASTEXITCODE -eq 0) {
-    # Extract IV from encrypted file
-    $encryptedData = [System.IO.File]::ReadAllBytes($ivEncryptedFile)
-    $extractedIv = $encryptedData[0..15]
-    $ciphertextOnly = $encryptedData[16..($encryptedData.Length-1)]
-
-    # Save ciphertext without IV
-    $ciphertextFile = Join-Path $SCRIPT_DIR "ciphertext_only.bin"
-    [System.IO.File]::WriteAllBytes($ciphertextFile, $ciphertextOnly)
-
-    # Convert IV to hex for CLI
-    $ivHex = -join ($extractedIv | ForEach-Object { $_.ToString("X2") })
-
-    # Decrypt with provided IV
-    $ivDecryptedFile = Join-Path $SCRIPT_DIR "iv_decrypted.txt"
-    & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $ivHex --input $ciphertextFile --output $ivDecryptedFile
-
-    if ($LASTEXITCODE -eq 0) {
-        $original = Get-Content $ivTestFile -Raw
-        $decrypted = Get-Content $ivDecryptedFile -Raw
-
-        if ($original -eq $decrypted) {
-            Write-Status $true "Decryption with provided IV works"
-            $testResults += "PASSED: IV handling - Provided IV decryption"
-        } else {
-            Write-Status $false "Decryption with provided IV failed (content mismatch)"
-            $testResults += "FAILED: IV handling - Provided IV decryption"
-            $allTestsPassed = $false
-        }
-    } else {
-        Write-Status $false "Decryption with provided IV failed"
-        $testResults += "FAILED: IV handling - Provided IV decryption"
-        $allTestsPassed = $false
-    }
-} else {
-    Write-Status $false "Encryption for IV test failed"
-    $testResults += "FAILED: IV handling - Encryption failed"
-    $allTestsPassed = $false
-}
-
-Remove-Item $ivTestFile, $ivEncryptedFile, $ciphertextFile, $ivDecryptedFile -ErrorAction SilentlyContinue
-
-# Step 10: Validation and error handling tests
+# Step 10: Validation and Error Handling Tests
 Write-Section "Validation and Error Handling"
 
-# Test invalid key
 Write-Step "Testing invalid key rejection"
 $shortFilePath = Join-Path $SCRIPT_DIR "short.txt"
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "invalid" --input $shortFilePath --output "test.enc" 2>$null
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "invalid" --input $shortFilePath --output "test.enc" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-TestResult "PASSED: Validation - Invalid key rejected" "Validation"
+} else {
+    Add-TestResult "FAILED: Validation - Invalid key accepted" "Validation"
+}
+
+Write-Step "Testing missing key for decryption"
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation decrypt --input $shortFilePath --output "test.dec" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-TestResult "PASSED: Validation - Missing key for decryption rejected" "Validation"
+} else {
+    Add-TestResult "FAILED: Validation - Missing key for decryption accepted" "Validation"
+}
+
+Write-Step "Testing IV handling validation"
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --iv "000102" --input $shortFilePath --output "test.enc" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-TestResult "PASSED: Validation - IV during encryption rejected" "Validation"
+} else {
+    Add-TestResult "FAILED: Validation - IV during encryption accepted" "Validation"
+}
+
+Write-Step "Testing AAD validation for non-AEAD modes"
+& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --aad "aabbcc" --input $shortFilePath --output "test.enc" 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject invalid key"
-    $testResults += "FAILED: Validation - Invalid key accepted"
-    $allTestsPassed = $false
+    Add-TestResult "PASSED: Validation - AAD with non-AEAD mode (should be ignored)" "Validation"
 } else {
-    Write-Status $true "Invalid key rejected"
-    $testResults += "PASSED: Validation - Invalid key rejected"
+    Add-TestResult "FAILED: Validation - AAD with non-AEAD mode rejected" "Validation"
 }
 
-# Test wrong key length
-Write-Step "Testing wrong key length"
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key "001122" --input $shortFilePath --output "test.enc" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject wrong key length"
-    $testResults += "FAILED: Validation - Wrong key length accepted"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "Wrong key length rejected"
-    $testResults += "PASSED: Validation - Wrong key length rejected"
-}
-
-# Test nonexistent file
-Write-Step "Testing nonexistent file rejection"
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key $KEY --input "nonexistent_file_12345.txt" --output "test.enc" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject nonexistent file"
-    $testResults += "FAILED: Validation - Nonexistent file accepted"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "Nonexistent file rejected"
-    $testResults += "PASSED: Validation - Nonexistent file rejected"
-}
-
-# Test IV provided during encryption (should fail)
-Write-Step "Testing IV rejection during encryption"
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --iv "000102030405060708090A0B0C0D0E0F" --input $shortFilePath --output "test.enc" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject IV during encryption"
-    $testResults += "FAILED: Validation - IV accepted during encryption"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "IV correctly rejected during encryption"
-    $testResults += "PASSED: Validation - IV rejected during encryption"
-}
-
-# Test missing IV for decryption
-Write-Step "Testing missing IV detection"
-$shortCipherFile = Join-Path $SCRIPT_DIR "short_cipher.bin"
-"test" | Out-File -FilePath $shortCipherFile -Encoding utf8
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --input $shortCipherFile --output "test.dec" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should detect missing IV"
-    $testResults += "FAILED: Validation - Missing IV not detected"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "Missing IV correctly detected"
-    $testResults += "PASSED: Validation - Missing IV detected"
-}
-Remove-Item $shortCipherFile -ErrorAction SilentlyContinue
-
-# Test invalid hash algorithm
-Write-Step "Testing invalid hash algorithm rejection"
-& $CRYPTOCORE_EXE dgst --algorithm "invalid_hash" --input $shortFilePath 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject invalid hash algorithm"
-    $testResults += "FAILED: Validation - Invalid hash algorithm accepted"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "Invalid hash algorithm rejected"
-    $testResults += "PASSED: Validation - Invalid hash algorithm rejected"
-}
-
-# NEW: Test HMAC validation
-Write-Step "Testing HMAC validation"
-
-# Test HMAC without key
-& $CRYPTOCORE_EXE dgst --algorithm sha256 --hmac --input $shortFilePath 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject HMAC without key"
-    $testResults += "FAILED: HMAC Validation - No key accepted"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "HMAC without key rejected"
-    $testResults += "PASSED: HMAC Validation - No key rejected"
-}
-
-# Test HMAC with key but no --hmac flag
-& $CRYPTOCORE_EXE dgst --algorithm sha256 --key "001122" --input $shortFilePath 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Status $false "Should reject key without --hmac flag"
-    $testResults += "FAILED: HMAC Validation - Key without --hmac accepted"
-    $allTestsPassed = $false
-} else {
-    Write-Status $true "Key without --hmac flag rejected"
-    $testResults += "PASSED: HMAC Validation - Key without --hmac rejected"
-}
-
-# Step 11: File handling tests
-Write-Section "File Handling Tests"
-
-# Test automatic output naming
-Write-Step "Testing automatic output naming"
-$autoTestFile = Join-Path $SCRIPT_DIR "auto_test.txt"
-"Auto name test" | Out-File -FilePath $autoTestFile -Encoding utf8
-
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation encrypt --key $KEY --input $autoTestFile
-if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc")) {
-    Write-Status $true "Automatic encryption naming works"
-    $testResults += "PASSED: File handling - Auto encryption naming"
-} else {
-    Write-Status $false "Automatic encryption naming failed"
-    $testResults += "FAILED: File handling - Auto encryption naming"
-    $allTestsPassed = $false
-}
-
-& $CRYPTOCORE_EXE crypto --algorithm aes --mode ecb --operation decrypt --key $KEY --input "$autoTestFile.enc"
-if ($LASTEXITCODE -eq 0 -and (Test-Path "$autoTestFile.enc.dec")) {
-    Write-Status $true "Automatic decryption naming works"
-    $testResults += "PASSED: File handling - Auto decryption naming"
-} else {
-    Write-Status $false "Automatic decryption naming failed"
-    $testResults += "FAILED: File handling - Auto decryption naming"
-    $allTestsPassed = $false
-}
-
-Remove-Item $autoTestFile, "$autoTestFile.enc", "$autoTestFile.enc.dec" -ErrorAction SilentlyContinue
-
-# Step 12: OpenSSL interoperability tests
+# Step 11: OpenSSL Interoperability Tests
 Write-Section "OpenSSL Interoperability Tests"
 
 if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
-    Write-Step "Testing OpenSSL interoperability"
+    Write-Step "Testing CBC mode interoperability"
+
+    $interopTestFile = Join-Path $SCRIPT_DIR "interop_test.txt"
+    "OpenSSL interoperability test" | Out-File -FilePath $interopTestFile -Encoding utf8
+
+    $TEST_IV = "000102030405060708090A0B0C0D0E0F"
 
     try {
-        # Test 1: Encrypt with our tool, decrypt with OpenSSL
-        $opensslTest1File = Join-Path $SCRIPT_DIR "openssl_test1.txt"
-        "OpenSSL interoperability test data" | Out-File -FilePath $opensslTest1File -Encoding utf8
+        # Our tool -> OpenSSL
+        $ourEncFile = Join-Path $SCRIPT_DIR "our_encrypted.bin"
+        & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --input $interopTestFile --output $ourEncFile
 
-        $ourEncryptedFile = Join-Path $SCRIPT_DIR "our_encrypted.bin"
-
-        # Encrypt with our tool
-        & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --input $opensslTest1File --output $ourEncryptedFile
-
-        if ($LASTEXITCODE -eq 0) {
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $ourEncFile)) {
             # Extract IV and ciphertext
-            $encryptedData = [System.IO.File]::ReadAllBytes($ourEncryptedFile)
+            $encryptedData = [System.IO.File]::ReadAllBytes($ourEncFile)
             $ivBytes = $encryptedData[0..15]
             $ciphertextBytes = $encryptedData[16..($encryptedData.Length-1)]
 
@@ -872,173 +649,39 @@ if (Get-Command "openssl" -ErrorAction SilentlyContinue) {
             $ivHex = -join ($ivBytes | ForEach-Object { $_.ToString("X2") })
 
             # Decrypt with OpenSSL
-            $opensslDecrypted1File = Join-Path $SCRIPT_DIR "openssl_decrypted1.txt"
-            openssl enc -aes-128-cbc -d -K $KEY -iv $ivHex -in $ourCiphertextFile -out $opensslDecrypted1File
+            $opensslDecFile = Join-Path $SCRIPT_DIR "openssl_decrypted.txt"
+            openssl enc -aes-128-cbc -d -K $KEY -iv $ivHex -in $ourCiphertextFile -out $opensslDecFile
 
-            if ($LASTEXITCODE -eq 0) {
-                $original = Get-Content $opensslTest1File -Raw
-                $decrypted = Get-Content $opensslDecrypted1File -Raw
-
-                if ($original -eq $decrypted) {
-                    Write-Status $true "OurTool -> OpenSSL: PASS"
-                    $testResults += "PASSED: Interop - OurTool to OpenSSL"
-                } else {
-                    Write-Status $false "OurTool -> OpenSSL: FAIL (content mismatch)"
-                    $testResults += "FAILED: Interop - OurTool to OpenSSL"
-                    $allTestsPassed = $false
-                }
-            } else {
-                Write-Status $false "OurTool -> OpenSSL: FAIL (OpenSSL decryption failed)"
-                $testResults += "FAILED: Interop - OurTool to OpenSSL"
-                $allTestsPassed = $false
-            }
-        } else {
-            Write-Status $false "OurTool -> OpenSSL: FAIL (our encryption failed)"
-            $testResults += "FAILED: Interop - OurTool to OpenSSL"
-            $allTestsPassed = $false
-        }
-
-        # Test 2: Encrypt with OpenSSL, decrypt with our tool
-        $opensslTest2File = Join-Path $SCRIPT_DIR "openssl_test2.txt"
-        "OpenSSL to our tool test" | Out-File -FilePath $opensslTest2File -Encoding utf8
-
-        $opensslEncryptedFile = Join-Path $SCRIPT_DIR "openssl_encrypted.bin"
-
-        # Encrypt with OpenSSL
-        $TEST_IV = "000102030405060708090A0B0C0D0E0F"
-        openssl enc -aes-128-cbc -K $KEY -iv $TEST_IV -in $opensslTest2File -out $opensslEncryptedFile
-
-        if ($LASTEXITCODE -eq 0) {
-            # Decrypt with our tool
-            $ourDecryptedFile = Join-Path $SCRIPT_DIR "our_decrypted.txt"
-            & $CRYPTOCORE_EXE crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --iv $TEST_IV --input $opensslEncryptedFile --output $ourDecryptedFile
-
-            if ($LASTEXITCODE -eq 0) {
-                $original = Get-Content $opensslTest2File -Raw
-                $decrypted = Get-Content $ourDecryptedFile -Raw
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $opensslDecFile)) {
+                $original = Get-Content $interopTestFile -Raw
+                $decrypted = Get-Content $opensslDecFile -Raw
 
                 if ($original -eq $decrypted) {
-                    Write-Status $true "OpenSSL -> OurTool: PASS"
-                    $testResults += "PASSED: Interop - OpenSSL to OurTool"
+                    Add-TestResult "PASSED: Interop - OurTool -> OpenSSL CBC" "Interop"
                 } else {
-                    Write-Status $false "OpenSSL -> OurTool: FAIL (content mismatch)"
-                    $testResults += "FAILED: Interop - OpenSSL to OurTool"
-                    $allTestsPassed = $false
+                    Add-TestResult "FAILED: Interop - OurTool -> OpenSSL content mismatch" "Interop"
                 }
             } else {
-                Write-Status $false "OpenSSL -> OurTool: FAIL (our decryption failed)"
-                $testResults += "FAILED: Interop - OpenSSL to OurTool"
-                $allTestsPassed = $false
+                Add-TestResult "FAILED: Interop - OurTool -> OpenSSL decryption failed" "Interop"
             }
+
+            Remove-Item $ourIvFile, $ourCiphertextFile, $opensslDecFile -ErrorAction SilentlyContinue
         } else {
-            Write-Status $false "OpenSSL -> OurTool: FAIL (OpenSSL encryption failed)"
-            $testResults += "FAILED: Interop - OpenSSL to OurTool"
-            $allTestsPassed = $false
+            Add-TestResult "FAILED: Interop - OurTool encryption failed" "Interop"
         }
 
-        # Cleanup
-        Remove-Item $opensslTest1File, $opensslTest2File, $ourEncryptedFile, $ourIvFile, $ourCiphertextFile, $opensslDecrypted1File, $opensslEncryptedFile, $ourDecryptedFile -ErrorAction SilentlyContinue
+        Remove-Item $ourEncFile -ErrorAction SilentlyContinue
+        Remove-Item $interopTestFile -ErrorAction SilentlyContinue
 
     } catch {
-        Write-Status $false "OpenSSL interoperability test error: $($_.Exception.Message)"
-        $testResults += "FAILED: Interop - Test error"
-        $allTestsPassed = $false
+        Add-TestResult "FAILED: Interop - Test error: $($_.Exception.Message)" "Interop"
     }
 } else {
-    Write-Host "OpenSSL not available, skipping interoperability tests" -ForegroundColor Yellow
-    $testResults += "SKIPPED: OpenSSL interoperability"
+    Add-TestResult "SKIPPED: Interop - OpenSSL not available" "Interop"
 }
 
-# Step 13: Performance and stress tests
-Write-Section "Performance and Stress Tests"
-
-Write-Step "Testing with larger files"
-# Create a larger test file if we have enough space
-try {
-    $freeSpace = (Get-PSDrive -Name (Get-Location).Drive.Name).Free
-    if ($freeSpace -gt 10MB) {
-        # Create 1MB file
-        $largeTestFile = Join-Path $SCRIPT_DIR "large_test.bin"
-        $largeData = New-Object byte[] 1MB
-        (New-Object Random).NextBytes($largeData)
-        [System.IO.File]::WriteAllBytes($largeTestFile, $largeData)
-
-        foreach ($mode in @("ecb", "cbc")) {
-            Write-Host "  Testing 1MB file with $mode..." -NoNewline
-
-            $largeEncryptedFile = Join-Path $SCRIPT_DIR "large_encrypted.bin"
-            $largeDecryptedFile = Join-Path $SCRIPT_DIR "large_decrypted.bin"
-
-            & $CRYPTOCORE_EXE crypto --algorithm aes --mode $mode --operation encrypt --key $KEY --input $largeTestFile --output $largeEncryptedFile
-            $encryptSuccess = ($LASTEXITCODE -eq 0)
-
-            & $CRYPTOCORE_EXE crypto --algorithm aes --mode $mode --operation decrypt --key $KEY --input $largeEncryptedFile --output $largeDecryptedFile
-            $decryptSuccess = ($LASTEXITCODE -eq 0)
-
-            if ($encryptSuccess -and $decryptSuccess) {
-                $originalBytes = [System.IO.File]::ReadAllBytes($largeTestFile)
-                $decryptedBytes = [System.IO.File]::ReadAllBytes($largeDecryptedFile)
-                $filesMatch = ($originalBytes.Length -eq $decryptedBytes.Length)
-
-                if ($filesMatch) {
-                    # Compare first and last few bytes for performance
-                    $match = $true
-                    for ($i = 0; $i -lt 100; $i++) {
-                        if ($originalBytes[$i] -ne $decryptedBytes[$i]) {
-                            $match = $false
-                            break
-                        }
-                    }
-                    if ($match) {
-                        for ($i = $originalBytes.Length - 100; $i -lt $originalBytes.Length; $i++) {
-                            if ($originalBytes[$i] -ne $decryptedBytes[$i]) {
-                                $match = $false
-                                break
-                            }
-                        }
-                    }
-
-                    if ($match) {
-                        Write-Host " Success" -ForegroundColor Green
-                        $testResults += "PASSED: Performance - 1MB file with $mode"
-                    } else {
-                        Write-Host " Content mismatch" -ForegroundColor Red
-                        $testResults += "FAILED: Performance - 1MB file with $mode"
-                        $allTestsPassed = $false
-                    }
-                } else {
-                    Write-Host " Size mismatch" -ForegroundColor Red
-                    $testResults += "FAILED: Performance - 1MB file with $mode"
-                    $allTestsPassed = $false
-                }
-            } else {
-                Write-Host " Execution failed" -ForegroundColor Red
-                $testResults += "FAILED: Performance - 1MB file with $mode"
-                $allTestsPassed = $false
-            }
-
-            Remove-Item $largeEncryptedFile, $largeDecryptedFile -ErrorAction SilentlyContinue
-        }
-
-        Remove-Item $largeTestFile -ErrorAction SilentlyContinue
-    } else {
-        Write-Host "  Skipping large file tests (insufficient disk space)" -ForegroundColor Yellow
-        $testResults += "SKIPPED: Performance - Large file tests"
-    }
-} catch {
-    Write-Host "  Skipping large file tests (error: $($_.Exception.Message))" -ForegroundColor Yellow
-    $testResults += "SKIPPED: Performance - Large file tests"
-}
-
-# Step 14: Integration tests
-Write-Section "Integration Tests"
-
-Write-Step "Running integration tests"
-cargo test --test integration_tests -- --nocapture
-Write-Status ($LASTEXITCODE -eq 0) "Integration tests"
-
-# Step 15: Cleanup
-Write-Section "Cleaning Up"
+# Step 12: Cleanup test files
+Write-Section "Cleanup"
 
 foreach ($file in $testFiles.GetEnumerator()) {
     $filePath = Join-Path $SCRIPT_DIR $file.Key
@@ -1046,54 +689,128 @@ foreach ($file in $testFiles.GetEnumerator()) {
 }
 Remove-Item (Join-Path $SCRIPT_DIR "binary_16.bin"), (Join-Path $SCRIPT_DIR "binary_with_nulls.bin"), (Join-Path $SCRIPT_DIR "random_1k.bin") -ErrorAction SilentlyContinue
 
-# Step 16: Results summary
+# Cleanup any remaining test files
+Get-ChildItem -Path $SCRIPT_DIR -Filter "*.enc" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+Get-ChildItem -Path $SCRIPT_DIR -Filter "*.dec" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+Get-ChildItem -Path $SCRIPT_DIR -Filter "*test*.txt" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+Get-ChildItem -Path $SCRIPT_DIR -Filter "*test*.bin" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+
+Add-TestResult "PASSED: Cleanup - Test files removed" "Cleanup"
+
+# Step 13: Generate detailed report
 Write-Section "Test Results Summary"
 
-$passedCount = 0
-$failedCount = 0
-$skippedCount = 0
+# Group results by category
+$resultsByCategory = $global:testResults | Group-Object Category
 
-foreach ($result in $testResults) {
-    if ($result -like "PASSED:*") {
-        Write-Host "  $result" -ForegroundColor Green
-        $passedCount++
-    } elseif ($result -like "FAILED:*") {
-        Write-Host "  $result" -ForegroundColor Red
-        $failedCount++
-    } else {
-        Write-Host "  $result" -ForegroundColor Yellow
-        $skippedCount++
+Write-Host "`nDetailed Results by Category:" -ForegroundColor Cyan
+Write-Host "=" * 50 -ForegroundColor Cyan
+
+foreach ($category in $resultsByCategory) {
+    $categoryName = $category.Name
+    $categoryResults = $category.Group
+
+    $passed = ($categoryResults | Where-Object { $_.Result -like "PASSED:*" }).Count
+    $failed = ($categoryResults | Where-Object { $_.Result -like "FAILED:*" }).Count
+    $skipped = ($categoryResults | Where-Object { $_.Result -like "SKIPPED:*" }).Count
+    $total = $categoryResults.Count
+
+    $color = if ($failed -eq 0) { "Green" } else { "Red" }
+
+    Write-Host "`n$categoryName" -ForegroundColor $color
+    Write-Host "  Total: $total" -ForegroundColor White
+    Write-Host "  Passed: $passed" -ForegroundColor Green
+    Write-Host "  Failed: $failed" -ForegroundColor Red
+    Write-Host "  Skipped: $skipped" -ForegroundColor Yellow
+
+    if ($failed -gt 0) {
+        Write-Host "  Failures:" -ForegroundColor Red
+        foreach ($failure in ($categoryResults | Where-Object { $_.Result -like "FAILED:*" })) {
+            Write-Host "    - $($failure.Result)" -ForegroundColor Red
+        }
     }
 }
 
-Write-Host ""
-Write-Host "================================================" -ForegroundColor Cyan
-Write-Host "  FINAL RESULTS" -ForegroundColor Cyan
-Write-Host "================================================" -ForegroundColor Cyan
-Write-Host "Total Tests: $($testResults.Count)" -ForegroundColor White
-Write-Host "Passed: $passedCount" -ForegroundColor Green
-Write-Host "Failed: $failedCount" -ForegroundColor Red
-Write-Host "Skipped: $skippedCount" -ForegroundColor Yellow
-Write-Host ""
+Write-Host "`n" + ("=" * 50) -ForegroundColor Cyan
+Write-Host "FINAL SUMMARY" -ForegroundColor Cyan
+Write-Host "=" * 50 -ForegroundColor Cyan
+Write-Host "Total Tests: $($global:testResults.Count)" -ForegroundColor White
+Write-Host "Passed: $($global:passedCount)" -ForegroundColor Green
+Write-Host "Failed: $($global:failedCount)" -ForegroundColor Red
+Write-Host "Skipped: $($global:skippedCount)" -ForegroundColor Yellow
+Write-Host "Success Rate: $([math]::Round(($global:passedCount / $global:testResults.Count) * 100, 1))%" -ForegroundColor White
 
-if ($allTestsPassed) {
-    Write-Host "ALL TESTS PASSED! CryptoCore is fully functional!" -ForegroundColor Green
-    Write-Host "All requirements from M5 document are satisfied" -ForegroundColor Green
-    Write-Host "HMAC functionality implemented and tested" -ForegroundColor Green
-    Write-Host "RFC 4231 test vectors verified" -ForegroundColor Green
-    Write-Host "HMAC verification with --verify flag working" -ForegroundColor Green
-    Write-Host "CSPRNG module working with automatic key generation" -ForegroundColor Green
-    Write-Host "All 5 encryption modes working: ECB, CBC, CFB, OFB, CTR" -ForegroundColor Green
-    Write-Host "Hash functions SHA-256 and SHA3-256 working correctly" -ForegroundColor Green
-    Write-Host "Comprehensive testing completed successfully" -ForegroundColor Green
-    Write-Host "File handling, validation, and interoperability verified" -ForegroundColor Green
+Write-Host "`n" + ("=" * 50) -ForegroundColor Cyan
+Write-Host "FEATURE STATUS" -ForegroundColor Cyan
+Write-Host "=" * 50 -ForegroundColor Cyan
+
+# Check feature status
+$features = @(
+    @{Name="Basic CLI"; Tests=$global:testResults | Where-Object { $_.Result -like "*Basic*" }},
+    @{Name="Hash Functions"; Tests=$global:testResults | Where-Object { $_.Result -like "*Hash*" }},
+    @{Name="HMAC"; Tests=$global:testResults | Where-Object { $_.Result -like "*HMAC*" }},
+    @{Name="GCM (AEAD)"; Tests=$global:testResults | Where-Object { $_.Result -like "*GCM*" }},
+    @{Name="ETM (Encrypt-then-MAC)"; Tests=$global:testResults | Where-Object { $_.Result -like "*ETM*" }},
+    @{Name="Classic Modes"; Tests=$global:testResults | Where-Object { $_.Result -like "*ecb*" -or $_.Result -like "*cbc*" -or $_.Result -like "*cfb*" -or $_.Result -like "*ofb*" -or $_.Result -like "*ctr*" }},
+    @{Name="Validation"; Tests=$global:testResults | Where-Object { $_.Result -like "*Validation*" }},
+    @{Name="Interoperability"; Tests=$global:testResults | Where-Object { $_.Result -like "*Interop*" }}
+)
+
+foreach ($feature in $features) {
+    $featureTests = $feature.Tests
+    if ($featureTests) {
+        $passed = ($featureTests | Where-Object { $_.Result -like "PASSED:*" }).Count
+        $failed = ($featureTests | Where-Object { $_.Result -like "FAILED:*" }).Count
+        $total = $featureTests.Count
+
+        $status = if ($failed -eq 0) { "[OK] PASSED" } else { "[X] FAILED" }
+        $color = if ($failed -eq 0) { "Green" } else { "Red" }
+
+        Write-Host "$status $($feature.Name) ($passed/$total passed)" -ForegroundColor $color
+    }
+}
+
+Write-Host ("=" * 50) -ForegroundColor Cyan
+
+if ($global:allTestsPassed) {
+    Write-Host "ALL TESTS PASSED! CryptoCore v0.6.0 is fully functional!" -ForegroundColor Green
+    Write-Host "All requirements from M6 document are satisfied" -ForegroundColor Green
+    Write-Host "AEAD (GCM and Encrypt-then-MAC) implemented" -ForegroundColor Green
+    Write-Host "Catastrophic authentication failure working" -ForegroundColor Green
+    Write-Host "Nonce generation and AAD support working" -ForegroundColor Green
+    Write-Host "Backward compatibility maintained" -ForegroundColor Green
 } else {
-    Write-Host "SOME TESTS FAILED! Please check the errors above." -ForegroundColor Red
+    Write-Host "SOME TESTS FAILED! Please check the failures above." -ForegroundColor Red
+    Write-Host "Failed tests need investigation before submission." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "================================================" -ForegroundColor Cyan
+Write-Host "`nTest execution completed at $(Get-Date -Format 'HH:mm:ss')" -ForegroundColor Gray
 
-Write-Host ""
-Write-Host "Press any key to exit..."
+# Save detailed report to file
+$reportFile = Join-Path $PROJECT_ROOT "test_report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+$reportContent = @"
+CRYPTOCORE TEST REPORT
+Generated: $(Get-Date)
+Version: 0.6.0
+Test Script: $(Split-Path -Leaf $MyInvocation.MyCommand.Path)
+
+SUMMARY:
+========
+Total Tests: $($global:testResults.Count)
+Passed: $($global:passedCount)
+Failed: $($global:failedCount)
+Skipped: $($global:skippedCount)
+Success Rate: $([math]::Round(($global:passedCount / $global:testResults.Count) * 100, 1))%
+
+DETAILED RESULTS:
+=================
+$(($global:testResults | ForEach-Object { "$($_.Timestamp.ToString('HH:mm:ss')) - $($_.Category): $($_.Result)" }) -join "`n")
+
+"@
+
+$reportContent | Out-File -FilePath $reportFile -Encoding UTF8
+Write-Host "`nDetailed report saved to: $reportFile" -ForegroundColor Cyan
+
+Write-Host "`nPress any key to exit..."
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

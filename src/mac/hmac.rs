@@ -67,7 +67,7 @@ impl HMAC {
         let outer_hash = hasher.hash_data(&outer_data)?;
         Ok(outer_hash)
     }
-
+    #[allow(dead_code)]
     pub fn compute_file(&self, file_path: &Path) -> Result<String> {
         let ipad = vec![0x36; self.block_size];
         let opad = vec![0x5c; self.block_size];
@@ -85,7 +85,7 @@ impl HMAC {
 
         Ok(outer_hash)
     }
-
+    #[allow(dead_code)]
     fn hash_file_with_prefix(&self, file_path: &Path, prefix: &[u8]) -> Result<String> {
         if file_path.to_str() == Some("-") {
             let mut data = Vec::new();

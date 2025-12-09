@@ -4,15 +4,17 @@
 
 ## Возможности
 
-- **Поддержка 5 режимов шифрования**: ECB, CBC, CFB, OFB, CTR
+- **Поддержка 7 режимов шифрования**: ECB, CBC, CFB, OFB, CTR, GCM (аутентифицированный), ETM (Encrypt-then-MAC)
 - **Криптографические хеш-функции**: SHA-256 и SHA3-256 для проверки целостности данных
 - **HMAC (Hash-based Message Authentication Code)**: Аутентификация сообщений с использованием SHA-256
-- **Безопасная генерация IV**: Автоматическая генерация криптографически безопасных IV
+- **Аутентифицированное шифрование (AEAD)**: GCM и Encrypt-then-MAC режимы с поддержкой AAD
+- **Безопасная генерация IV/Nonce**: Автоматическая генерация криптографически безопасных IV и nonce
 - **Автоматическая генерация ключей**: Ключ опционален для шифрования
-- **Гибкая работа с IV**: Поддержка чтения IV из файла или указания через CLI
-- **Интероперабельность**: Совместимость с OpenSSL для всех режимов
+- **Гибкая работа с IV/Nonce**: Поддержка чтения из файла или указания через CLI
+- **Интероперабельность**: Совместимость с OpenSSL для всех режимов, включая GCM
 - **Поддержка различных типов данных**: Текст, бинарные файлы, Unicode, файлы с нуль-байтами
 - **Проверка слабых ключей**: Предупреждения при использовании потенциально слабых ключей
+- **Катастрофический отказ при аутентификации**: Защита от поддельных данных без утечки информации
 
 ## Инструкции по сборке
 
@@ -177,6 +179,115 @@ cryptocore crypto --algorithm aes --mode ecb --operation decrypt \
 .\cryptocore crypto --algorithm aes --mode ecb --operation decrypt --key 00112233445566778899aabbccddeeff --input ciphertext.bin --output decrypted.txt
 ```
 
+### GCM (Galois/Counter Mode) Шифрование:
+
+**Bash/Linux:**
+```bash
+# GCM шифрование с автоматической генерацией nonce и AAD
+cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input secret.txt \
+  --output secret.gcm.bin \
+  --aad aabbccddeeff001122334455
+
+# Вывод включает сгенерированный nonce
+# [INFO] Generated random nonce (hex): 1a2b3c4d5e6f7890a1b2c3d4
+# [SUCCESS] GCM encryption completed successfully
+```
+
+**PowerShell:**
+```powershell
+# GCM шифрование с указанием nonce
+.\cryptocore crypto --algorithm aes --mode gcm --operation encrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --nonce 000000000000000000000000 `
+  --input secret.txt `
+  --output secret.gcm.bin `
+  --aad aabbccddeeff
+```
+
+### GCM Дешифрование:
+
+**Bash/Linux:**
+```bash
+# GCM дешифрование с правильным AAD
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input secret.gcm.bin \
+  --output decrypted.txt \
+  --aad aabbccddeeff001122334455
+# [SUCCESS] GCM decryption completed successfully
+
+# GCM дешифрование с неправильным AAD (катастрофический отказ)
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input secret.gcm.bin \
+  --output should_fail.txt \
+  --aad wrongaad1234567890abcdef
+# [ERROR] Authentication failed: tag mismatch or ciphertext tampered
+# [ERROR] No plaintext output will be produced
+# Выходной файл не создан!
+```
+
+**PowerShell:**
+```powershell
+# GCM дешифрование
+.\cryptocore crypto --algorithm aes --mode gcm --operation decrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --input secret.gcm.bin `
+  --output decrypted.txt `
+  --aad aabbccddeeff
+```
+
+### ETM (Encrypt-then-MAC) Шифрование:
+
+**Bash/Linux:**
+```bash
+# ETM с CBC как базовый режим
+cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input document.txt \
+  --output document.etm.bin \
+  --aad metadata123456
+
+# ETM с CTR как базовый режим (без padding)
+cryptocore crypto --algorithm aes --mode etm --base-mode ctr --operation encrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input video.mp4 \
+  --output video.etm.bin
+```
+
+**PowerShell:**
+```powershell
+# ETM шифрование
+.\cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt `
+  --key 00112233445566778899aabbccddeeff `
+  --input document.txt `
+  --output document.etm.bin `
+  --aad metadata123456
+```
+
+### ETM Дешифрование:
+
+**Bash/Linux:**
+```bash
+# ETM дешифрование
+cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input document.etm.bin \
+  --output decrypted.txt \
+  --aad metadata123456
+
+# ETM с неправильным AAD (катастрофический отказ)
+cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input document.etm.bin \
+  --output should_fail.txt \
+  --aad wrongmetadata
+# [ERROR] Authentication failed: MAC mismatch
+# Выходной файл удален!
+```
+
 ---
 
 ### Вычисление хеш-сумм файлов:
@@ -260,26 +371,29 @@ cryptocore dgst --algorithm sha256 --hmac --key aabbcc --input data.txt
 
 ### Команда `crypto` (шифрование/дешифрование):
 
-| Аргумент | Описание | Обязательный |
-|----------|-------------|----------|
-| `--algorithm` | Алгоритм шифрования (в настоящее время только `aes`) | Да |
-| `--mode` | Режим работы (`ecb`, `cbc`, `cfb`, `ofb`, `ctr`) | Да |
-| `--operation` | Операция (`encrypt` или `decrypt`) | Да |
-| `--key` | 16-байтный ключ в виде 32-символьной hex-строки. **Опционально для шифрования** - если не указан, генерируется случайный ключ | Нет (для шифрования) |
-| `--input` | Путь к входному файлу | Да |
-| `--output` | Путь к выходному файлу (опционально) | Нет |
-| `--iv` | Вектор инициализации для дешифрования (32 hex символа) | Нет |
+| Аргумент | Описание | Обязательный | Примечания |
+|----------|-------------|----------|------------|
+| `--algorithm` | Алгоритм шифрования (`aes`) | Да | Только AES-128 |
+| `--mode` | Режим работы (`ecb`, `cbc`, `cfb`, `ofb`, `ctr`, `gcm`, `etm`) | Да | `gcm` и `etm` - новые AEAD режимы |
+| `--operation` | Операция (`encrypt` или `decrypt`) | Да | |
+| `--key` | 16-байтный ключ (32 hex символа) | Нет (для шифрования) | Для шифрования: опционально (генерируется случайный) |
+| `--input` | Путь к входному файлу | Да | Используйте `-` для stdin |
+| `--output` | Путь к выходному файлу | Нет | Если не указан, генерируется автоматически |
+| `--iv` | Вектор инициализации (32 hex символа) | Нет | Для CBC, CFB, OFB, CTR, ETM режимов |
+| `--nonce` | Nonce для GCM (24 hex символа) | Нет | Только для GCM режима |
+| `--aad` | Additional Authenticated Data (hex строка) | Нет | Для GCM и ETM режимов |
+| `--base-mode` | Базовый режим для ETM (`ecb`, `cbc`, `cfb`, `ofb`, `ctr`) | Нет | Только для `--mode etm` |
 
 ### Команда `dgst` (вычисление хешей и HMAC):
 
-| Аргумент | Описание | Обязательный |
-|----------|-------------|----------|
-| `--algorithm` | Алгоритм хеширования (`sha256`, `sha3-256`) | Да |
-| `--input` | Путь к входному файлу (используйте `-` для stdin) | Да |
-| `--output` | Путь к выходному файлу (опционально) | Нет |
-| `--hmac` | Включить режим HMAC | Нет |
-| `--key` | Ключ для HMAC (hex-строка произвольной длины) | Только с `--hmac` |
-| `--verify` | Файл с ожидаемым HMAC для верификации | Нет |
+| Аргумент | Описание | Обязательный | Примечания |
+|----------|-------------|----------|------------|
+| `--algorithm` | Алгоритм хеширования (`sha256`, `sha3-256`) | Да | |
+| `--input` | Путь к входному файлу (используйте `-` для stdin) | Да | |
+| `--output` | Путь к выходному файлу | Нет | |
+| `--hmac` | Включить режим HMAC | Нет | |
+| `--key` | Ключ для HMAC (hex-строка произвольной длины) | Только с `--hmac` | |
+| `--verify` | Файл с ожидаемым HMAC для верификации | Нет | Только с `--hmac` |
 
 ### Формат ключа для шифрования:
 - 32 шестнадцатеричных символа (16 байт)
@@ -295,7 +409,17 @@ cryptocore dgst --algorithm sha256 --hmac --key aabbcc --input data.txt
 ### Формат IV:
 - 32 шестнадцатеричных символа (16 байт)
 - Пример: `aabbccddeeff00112233445566778899`
-- Только для дешифрования в режимах CBC, CFB, OFB, CTR
+- Только для дешифрования в режимах CBC, CFB, OFB, CTR, ETM
+
+### Формат Nonce для GCM:
+- 24 шестнадцатеричных символа (12 байт)
+- Пример: `000000000000000000000000`
+- Для шифрования: если не указан, генерируется случайный
+
+### Формат AAD:
+- Шестнадцатеричная строка произвольной длины
+- Пример: `aabbccddeeff001122334455`
+- Опциональный: если не указан, используется пустая строка
 
 ### Формат вывода хешей/HMAC:
 - `HASH_VALUE INPUT_FILE_PATH` (совместим с форматом *sum инструментов)
@@ -308,9 +432,48 @@ cryptocore dgst --algorithm sha256 --hmac --key aabbcc --input data.txt
 - **Дешифрование**: `{имя_входного_файла}.dec`
 - **Хеширование/HMAC**: вывод в stdout
 
-## HMAC (Hash-based Message Authentication Code)
+### Режим GCM (Galois/Counter Mode)
+GCM объединяет шифрование в режиме счетчика (CTR) с аутентификацией на основе умножения в поле Галуа GF(2^128).
 
-### Обзор
+#### Особенности:
+- **Размер nonce**: 12 байт (рекомендуется)
+- **Размер тега**: 16 байт (128 бит)
+- **Формат вывода**: `nonce (12 байт) | ciphertext | tag (16 байт)`
+- **AAD (Additional Authenticated Data)**: Опциональные данные для аутентификации
+- **Катастрофический отказ**: При неудачной аутентификации данные не выводятся
+
+#### Формат работы GCM:
+```
+TAG = GHASH(H, AAD, CT) ⊕ E(K, J0)
+где:
+  H = E(K, 0)
+  J0 = nonce || 0x01 (для 12-байтного nonce)
+```
+
+### Encrypt-then-MAC
+Реализована парадигма "Зашифровать-потом-MAC", которая комбинирует любой блочный режим шифрования с HMAC-SHA256.
+
+#### Особенности:
+- **Шифрование**: Любой режим (CBC, CTR, CFB и т.д.)
+- **Аутентификация**: HMAC-SHA256 над ciphertext || AAD
+- **Разделение ключей**: Разные ключи для шифрования и MAC
+- **Формат вывода**: `IV | ciphertext | tag (32 байт)`
+- **Гибкость**: Можно использовать любой базовый режим шифрования
+
+#### Формула Encrypt-then-MAC:
+```
+C = E(K_e, P)
+T = HMAC-SHA256(K_m, C || AAD)
+Output = IV || C || T
+```
+
+### Умножение в поле Галуа GF(2^128)
+Реализация GCM включает эффективное умножение в поле Галуа GF(2^128) с использованием неприводимого полинома:
+```
+P(x) = x^128 + x^7 + x^2 + x + 1
+```
+
+## HMAC (Hash-based Message Authentication Code)
 HMAC обеспечивает аутентификацию сообщений и целостность данных с использованием криптографических хеш-функций. Реализация соответствует RFC 2104.
 
 ### Особенности реализации:
@@ -318,9 +481,9 @@ HMAC обеспечивает аутентификацию сообщений и
 - **Стандарт**: RFC 2104
 - **Размер блока**: 64 байта
 - **Обработка ключей**:
-   - Ключи длиннее 64 байт хешируются
-   - Ключи короче 64 байт дополняются нулями
-   - Поддержка ключей произвольной длины
+    - Ключи длиннее 64 байт хешируются
+    - Ключи короче 64 байт дополняются нулями
+    - Поддержка ключей произвольной длины
 
 ### Формула HMAC:
 ```
@@ -369,6 +532,18 @@ cryptocore dgst --algorithm sha256 --hmac --key <ключ> --input <файл> --
 - **Требует IV** (используется как начальное значение счетчика)
 - Высокая производительность, возможность параллельной обработки
 
+### GCM (Galois/Counter Mode) - НОВЫЙ
+- **Аутентифицированное шифрование**, объединяет CTR с аутентификацией
+- **Требует nonce** (12 байт), поддерживает AAD
+- **Не требует padding**, потоковый режим
+- Высокая производительность, стандарт для TLS 1.2+
+
+### ETM (Encrypt-then-MAC) - НОВЫЙ
+- **Комбинированный режим**, любая комбинация шифрования + HMAC
+- **Гибкий**: можно использовать с любым базовым режимом
+- **Поддерживает AAD**, разделение ключей
+- Универсальное решение для аутентифицированного шифрования
+
 ## Хеш-алгоритмы
 
 ### SHA-256
@@ -397,6 +572,7 @@ cryptocore dgst --algorithm sha256 --hmac --key <ключ> --input <файл> --
 - **Битовое распределение**: 50.00% единиц (идеально)
 - **Уникальность ключей**: 1000/1000 без коллизий
 - **Уникальность IV**: 100/100 без коллизий
+- **Уникальность nonce**: 1000/1000 без коллизий
 - **Паттерны**: 0 повторяющихся последовательностей
 - **Непредсказуемость**: Разные результаты при последовательных вызовах
 
@@ -404,6 +580,12 @@ cryptocore dgst --algorithm sha256 --hmac --key <ключ> --input <файл> --
 ```
 [INFO] Generated random key: 5c02dca03af5d0cc48e9c8578ec25efb
 [INFO] Remember to save the generated key for decryption!
+```
+
+### Пример генерации nonce для GCM:
+```
+[INFO] Generated random nonce (hex): 1a2b3c4d5e6f7890a1b2c3d4
+[SUCCESS] GCM encryption completed successfully
 ```
 
 ## Проверка слабых ключей
@@ -439,6 +621,24 @@ chmod +x scripts/test.sh
 ```bash
 chmod +x scripts/test_nist.sh
 ./scripts/test.sh
+```
+
+### Тестирование AEAD (новые режимы):
+```bash
+# Тестирование GCM
+cargo test --test gcm
+
+# Тестирование Encrypt-then-MAC
+cargo test --test aead
+
+# Тестирование совместимости с OpenSSL
+cargo test --test openssl_compatibility
+
+# Тестирование больших данных в GCM
+cargo test --test gcm_large_data
+
+# Тестирование уникальности nonce
+cargo test --test gcm_nonce_uniqueness
 ```
 
 ### Тестирование хеш-функций и HMAC:
@@ -479,6 +679,8 @@ make test-cbc
 make test-cfb
 make test-ofb
 make test-ctr
+make test-gcm
+make test-etm
 
 # Тестирование хеш-функций
 make test-hash
@@ -495,8 +697,8 @@ make test-auto-key
 # Тестирование интероперабельности с OpenSSL
 make test-openssl
 
-# Тестирование безопасности
-make test-security
+# Тестирование безопасности AEAD
+make test-aead-security
 
 # Тестирование производительности
 make test-performance
@@ -518,6 +720,15 @@ cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key "СГЕН
 # Проверить что файлы идентичны
 diff test.txt test.cbc.dec && echo "УСПЕХ: Автоматическая генерация ключа работает"
 
+# Тестирование GCM
+echo "Testing GCM mode" > test_gcm.txt
+cryptocore crypto --algorithm aes --mode gcm --operation encrypt --key 00112233445566778899aabbccddeeff --input test_gcm.txt --output test_gcm.enc --aad test123
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt --key 00112233445566778899aabbccddeeff --input test_gcm.enc --output test_gcm.dec --aad test123
+diff test_gcm.txt test_gcm.dec && echo "УСПЕХ: GCM работает правильно"
+
+# Тестирование катастрофического отказа в GCM
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt --key 00112233445566778899aabbccddeeff --input test_gcm.enc --output should_fail.txt --aad wrongaad 2>/dev/null || echo "УСПЕХ: Катастрофический отказ работает"
+
 # Вычислить хеш файла
 cryptocore dgst --algorithm sha256 --input test.txt
 cryptocore dgst --algorithm sha3-256 --input test.txt
@@ -526,7 +737,7 @@ cryptocore dgst --algorithm sha3-256 --input test.txt
 cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input test.txt
 
 # Очистка
-rm test.txt test.cbc.enc test.cbc.dec
+rm test.txt test.cbc.enc test.cbc.dec test_gcm.txt test_gcm.enc test_gcm.dec
 ```
 
 **PowerShell:**
@@ -545,6 +756,16 @@ fc test.txt test.cbc.dec
 
 # Если файлы идентичны, вы увидите: "Сравнение файлов завершено. Различия не обнаружены."
 
+# Тестирование GCM
+echo "Testing GCM mode" > test_gcm.txt
+.\cryptocore crypto --algorithm aes --mode gcm --operation encrypt --key 00112233445566778899aabbccddeeff --input test_gcm.txt --output test_gcm.enc --aad test123
+.\cryptocore crypto --algorithm aes --mode gcm --operation decrypt --key 00112233445566778899aabbccddeeff --input test_gcm.enc --output test_gcm.dec --aad test123
+fc test_gcm.txt test_gcm.dec
+
+# Тестирование катастрофического отказа
+.\cryptocore crypto --algorithm aes --mode gcm --operation decrypt --key 00112233445566778899aabbccddeeff --input test_gcm.enc --output should_fail.txt --aad wrongaad 2>$null
+if ($LASTEXITCODE -ne 0) { Write-Host "УСПЕХ: Катастрофический отказ работает" }
+
 # Вычислить хеш файла
 .\cryptocore dgst --algorithm sha256 --input test.txt
 .\cryptocore dgst --algorithm sha3-256 --input test.txt
@@ -553,7 +774,7 @@ fc test.txt test.cbc.dec
 .\cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input test.txt
 
 # Очистка
-Remove-Item test.txt, test.cbc.enc, test.cbc.dec
+Remove-Item test.txt, test.cbc.enc, test.cbc.dec, test_gcm.txt, test_gcm.enc, test_gcm.dec -ErrorAction SilentlyContinue
 ```
 
 ### Модульные тесты:
@@ -647,6 +868,33 @@ openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv aabbccddeeff001
 .\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv aabbccddeeff00112233445566778899 --input file.enc --output file.dec
 ```
 
+### Интероперабельность GCM с OpenSSL:
+
+**Bash/Linux:**
+```bash
+# Шифруем GCM с нашим инструментом
+cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+  --key 00000000000000000000000000000000 \
+  --nonce 000000000000000000000000 \
+  --input plain.txt --output cipher.gcm \
+  --aad ""
+
+# Извлекаем компоненты для OpenSSL
+# GCM формат: nonce (12) | ciphertext | tag (16)
+dd if=cipher.gcm of=nonce.bin bs=1 count=12
+dd if=cipher.gcm of=tag.bin bs=1 skip=$(( $(stat -c%s cipher.gcm) - 16 )) count=16
+dd if=cipher.gcm of=ciphertext_only.bin bs=1 skip=12 count=$(( $(stat -c%s cipher.gcm) - 12 - 16 ))
+
+# Дешифруем OpenSSL
+openssl enc -aes-128-gcm -d \
+  -K 00000000000000000000000000000000 \
+  -iv $(xxd -p nonce.bin | tr -d '\n') \
+  -aad "" \
+  -in ciphertext_only.bin \
+  -out decrypted.txt \
+  -tag $(xxd -p tag.bin | tr -d '\n')
+```
+
 ### Интероперабельность хеш-функций:
 
 **Bash/Linux:**
@@ -663,16 +911,22 @@ sha3sum -a 256 file.txt
 
 - **Алгоритм**: AES-128 (Advanced Encryption Standard)
 - **Размер ключа**: 128 бит (16 байт)
-- **Режимы**: ECB, CBC, CFB, OFB, CTR
+- **Режимы**: ECB, CBC, CFB, OFB, CTR, GCM, ETM
 - **Размер блока**: 16 байт
-- **Размер IV**: 16 байт
+- **Размер IV**: 16 байт (для CBC, CFB, OFB, CTR, ETM)
+- **Размер Nonce**: 12 байт (для GCM)
+- **Размер тега**: 16 байт (GCM), 32 байта (ETM/HMAC-SHA256)
 - **Дополнение**: PKCS#7 (для ECB и CBC)
 - **Хеш-алгоритмы**: SHA-256, SHA3-256
 - **HMAC**: HMAC-SHA256 (RFC 2104)
+- **GCM**: Реализация по NIST SP 800-38D
 - **Генерация ключей**: Криптографически безопасный ГПСЧ (OpenSSL `rand_bytes()`)
-- **Генерация IV**: Криптографически безопасный генератор (`Csprng::generate_iv()`)
+- **Генерация IV/Nonce**: Криптографически безопасный генератор
 - **Библиотека**: OpenSSL через Rust crate `openssl`
-- **Формат файла**: Для режимов с IV - `<16-байт IV><шифротекст>`
+- **Формат файла**:
+    - CBC/CFB/OFB/CTR: `<16-байт IV><шифротекст>`
+    - GCM: `<12-байт nonce><шифротекст><16-байт тег>`
+    - ETM: `<16-байт IV><шифротекст><32-байт тег>`
 
 ## Структура проекта
 
@@ -688,13 +942,15 @@ cryptocore/
 │   │   └── parser.rs        # Парсинг аргументов CLI
 │   ├── crypto/              # Криптографические операции
 │   │   ├── mod.rs
+│   │   ├── aead.rs          # Реализация AEAD (Encrypt-then-MAC)
 │   │   └── modes/           # Реализации всех режимов
 │   │       ├── mod.rs
 │   │       ├── ecb.rs       # ECB режим
 │   │       ├── cbc.rs       # CBC режим
 │   │       ├── cfb.rs       # CFB режим
 │   │       ├── ofb.rs       # OFB режим
-│   │       └── ctr.rs       # CTR режим
+│   │       ├── ctr.rs       # CTR режим
+│   │       └── gcm.rs       # Реализация GCM режима
 │   ├── file/                # Операции ввода-вывода файлов
 │   │   ├── mod.rs
 │   │   └── io.rs            # Функции работы с файлами и IV
@@ -709,7 +965,12 @@ cryptocore/
 │   ├── integration_tests.rs
 │   ├── test_csprng.rs       # Тесты CSPRNG
 │   ├── test_hash.rs         # Тесты хеш-функций
-│   └── test_hmac_vectors.rs # Тесты HMAC (RFC 4231)
+│   ├── test_hmac_vectors.rs # Тесты HMAC (RFC 4231)
+│   ├── test_gcm_comprehensive.rs  # Тесты GCM
+│   ├── test_aead.rs         # Тесты AEAD
+│   ├── test_openssl_compatibility.rs # Тесты совместимости
+│   ├── test_gcm_large_data.rs      # Тесты больших данных
+│   └── test_gcm_nonce_uniqueness.rs # Тесты уникальности nonce
 ├── scripts/                 # Скрипты автоматического тестирования
 │   ├── test.ps1             # Полные тесты для PowerShell
 │   ├── test.sh              # Полные тесты для Linux/Mac
@@ -764,6 +1025,25 @@ cryptocore crypto --algorithm aes --mode ctr --operation encrypt \
 .\cryptocore crypto --algorithm aes --mode ctr --operation encrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input video.mp4 --output video.mp4.enc
 ```
 
+### Зашифровать с аутентификацией (GCM):
+
+**Bash/Linux:**
+```bash
+# Шифрование конфиденциального файла с контекстом
+cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+  --key $(openssl rand -hex 16) \
+  --input financial_report.pdf \
+  --output report.enc \
+  --aad $(echo -n "context:Q4_2023_financials" | xxd -p)
+
+# Шифрование с автоматической генерацией nonce
+cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input medical_record.txt \
+  --output record.enc \
+  --aad aabbccddeeff
+```
+
 ### Расшифровать с автоматическим именем выходного файла:
 
 **Bash/Linux:**
@@ -783,6 +1063,28 @@ cryptocore crypto --algorithm aes --mode cbc --operation decrypt \
 
 # Или в одну строку:
 .\cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 2b7e151628aed2a6abf7158809cf4f3c --input document.pdf.enc
+```
+
+### Расшифровать с проверкой аутентификации (GCM):
+
+**Bash/Linux:**
+```bash
+# Успешное дешифрование с правильным контекстом
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+  --key KEY_FROM_ENCRYPTION \
+  --input report.enc \
+  --output report_decrypted.pdf \
+  --aad $(echo -n "context:Q4_2023_financials" | xxd -p)
+# [SUCCESS] GCM decryption completed successfully
+
+# Попытка доступа с неправильным контекстом (провалится)
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+  --key KEY_FROM_ENCRYPTION \
+  --input report.enc \
+  --output /dev/null \
+  --aad $(echo -n "context:hacker_attempt" | xxd -p)
+# [ERROR] Authentication failed: tag mismatch or ciphertext tampered
+# [ERROR] No plaintext output will be produced
 ```
 
 ### Проверить целостность файлов с помощью хешей:
@@ -898,27 +1200,73 @@ cryptocore dgst --algorithm sha256 --hmac --key 0011223344556677 --input databas
 .\cryptocore dgst --algorithm sha256 --hmac --key 0011223344556677 --input database.bin --output database.hmac
 ```
 
+### Продвинутые сценарии использования AEAD:
+
+**Bash/Linux:**
+```bash
+# 1. Зашифровать файл с метаданными (AAD)
+cryptocore crypto --algorithm aes --mode gcm --operation encrypt \
+  --key $(openssl rand -hex 16) \
+  --input sensitive_data.csv \
+  --output encrypted.csv.gcm \
+  --aad $(echo -n "user:alice|department:finance|date:2024-01-15" | xxd -p)
+
+# 2. Проверить доступ только для финансового отдела
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+  --key KEY_FROM_STEP_1 \
+  --input encrypted.csv.gcm \
+  --output decrypted_finance.csv \
+  --aad $(echo -n "user:alice|department:finance|date:2024-01-15" | xxd -p)
+# Успешно: у Alice есть доступ к финансовым данным
+
+# 3. Попытка доступа из другого отдела (провалится)
+cryptocore crypto --algorithm aes --mode gcm --operation decrypt \
+  --key KEY_FROM_STEP_1 \
+  --input encrypted.csv.gcm \
+  --output /dev/null \
+  --aad $(echo -n "user:bob|department:engineering|date:2024-01-15" | xxd -p)
+# Ошибка: Bob из инженерного отдела не имеет доступа
+
+# 4. ETM для архивов с разными базовыми режимами
+cryptocore crypto --algorithm aes --mode etm --base-mode ctr --operation encrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input archive.tar.gz \
+  --output archive.enc \
+  --aad $(echo -n "compression:gzip|type:backup|version:2" | xxd -p)
+
+# 5. Проверка целостности архива при распаковке
+cryptocore crypto --algorithm aes --mode etm --base-mode ctr --operation decrypt \
+  --key 00112233445566778899aabbccddeeff \
+  --input archive.enc \
+  --output archive_decrypted.tar.gz \
+  --aad $(echo -n "compression:gzip|type:backup|version:2" | xxd -p)
+```
+
 ## Обработка ошибок
 
 Утилита предоставляет понятные сообщения об ошибках:
 
 - **Неверный ключ**: "Key must be 32 hex characters"
 - **Неверный IV**: "IV must be 32 hex characters"
+- **Неверный nonce**: "Nonce must be 24 hex characters (12 bytes) for GCM"
 - **IV при шифровании**: "IV should not be provided for encryption"
 - **Отсутствует IV при дешифровании**: "IV is required for decryption in this mode"
 - **Несуществующий входной файл**: "Input file does not exist"
-- **Файл слишком короткий для IV**: "File too short to contain IV"
+- **Файл слишком короткий для IV/nonce**: "File too short to contain IV/nonce"
 - **Неверный hex-формат**: "Key must be a valid hexadecimal string"
 - **Неверный алгоритм хеширования**: "Unsupported hash algorithm"
 - **Слабый ключ**: "WARNING: The provided key appears to be weak. Consider using a stronger key."
 - **HMAC без ключа**: "Key is required when --hmac is specified"
 - **HMAC верификация не удалась**: "[ERROR] HMAC verification failed"
+- **Аутентификация GCM не удалась**: "[ERROR] Authentication failed: tag mismatch or ciphertext tampered"
+- **Аутентификация ETM не удалась**: "[ERROR] Authentication failed: MAC mismatch"
+- **Катастрофический отказ**: "[ERROR] No plaintext output will be produced"
 
 ## Примечания по безопасности
 
 - Использует промышленный стандарт шифрования AES-128
 - Криптографически безопасная генерация ключей через OpenSSL `rand_bytes()`
-- Криптографически безопасная генерация IV через CSPRNG модуль
+- Криптографически безопасная генерация IV/Nonce через CSPRNG модуль
 - Использует проверенную реализацию криптографии от OpenSSL
 - Правильная обработка дополнения PKCS#7 для ECB и CBC режимов
 - Безопасное управление памятью для чувствительных данных
@@ -953,13 +1301,11 @@ cryptocore dgst --algorithm sha256 --hmac --key 0011223344556677 --input databas
 1. **Проверьте сообщения об ошибках** - они содержат детальную информацию
 2. **Для автоматической генерации ключа** - сохраните сгенерированный ключ для дешифрования
 3. **Для дешифрования в режимах с IV**:
-   - Либо не указывайте `--iv` (IV будет прочитан из файла)
-   - Либо укажите правильный IV через `--iv` (32 hex символа)
-4. **Для шифрования в режимах с IV** - не указывайте `--iv` (генерируется автоматически)
-5. **Для вычисления хешей** используйте команду `dgst` с указанием алгоритма
-6. **Для HMAC** используйте флаг `--hmac` с обязательным ключом `--key`
-7. **Формат вывода хешей/HMAC** совместим с системными утилитами (*sum)
-8. **Убедитесь что входной файл** существует и доступен для чтения
-9. **Проверьте доступное место на диске** для выходных файлов
-10. **В PowerShell используйте `.\` перед cryptocore** - это требование безопасности PowerShell для запуска локальных исполняемых файлов
-11. **При использовании слабых ключей** - обратите внимание на предупреждения
+    - Либо не указывайте `--iv` (IV будет прочитан из файла)
+    - Либо укажите правильный IV через `--iv` (32 hex символа)
+4. **Для дешифрования GCM** - nonce автоматически читается из файла
+5. **Для шифрования в режимах с IV** - не указывайте `--iv` (генерируется автоматически)
+6. **Для вычисления хешей** используйте команду `dgst` с указанием алгоритма
+7. **Для HMAC** используйте флаг `--hmac` с обязательным ключом `--key`
+8. **Для AEAD режимов** - используйте `--aad` для дополнительных аутентифицированных данных
+9. **В PowerShell используйте `.\` и `powershell -ExecutionPolicy Bypass -File .\` перед cryptocore или измените политику выполнения для текущей сессии `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process` ** - это требование безопасности PowerShell для запуска локальных исполняемых файлов

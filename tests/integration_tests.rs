@@ -346,65 +346,6 @@ fn test_decryption_with_provided_iv() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
-fn test_hash_commands() -> Result<(), Box<dyn std::error::Error>> {
-    let build_status = Command::new("cargo")
-        .args(["build"])
-        .status()?;
-
-    if !build_status.success() {
-        return Err("Build failed".into());
-    }
-
-    let test_file = NamedTempFile::new()?;
-    let test_content = "Hello, CryptoCore Hash Test!";
-    fs::write(&test_file, test_content)?;
-
-    let output = Command::new("./target/debug/cryptocore")
-        .args([
-            "dgst",
-            "--algorithm", "sha256",
-            "--input", test_file.path().to_str().unwrap(),
-        ])
-        .output()?;
-
-    assert!(output.status.success(), "SHA-256 command failed: {}", String::from_utf8_lossy(&output.stderr));
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("  "), "Output should contain hash and filename");
-    assert!(stdout.contains(test_file.path().to_str().unwrap()), "Output should contain filename");
-
-    let output = Command::new("./target/debug/cryptocore")
-        .args([
-            "dgst",
-            "--algorithm", "sha3-256",
-            "--input", test_file.path().to_str().unwrap(),
-        ])
-        .output()?;
-
-    assert!(output.status.success(), "SHA3-256 command failed: {}", String::from_utf8_lossy(&output.stderr));
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("  "), "Output should contain hash and filename");
-
-    let hash_output_file = NamedTempFile::new()?;
-    let output = Command::new("./target/debug/cryptocore")
-        .args([
-            "dgst",
-            "--algorithm", "sha256",
-            "--input", test_file.path().to_str().unwrap(),
-            "--output", hash_output_file.path().to_str().unwrap(),
-        ])
-        .output()?;
-
-    assert!(output.status.success(), "Hash with output file failed");
-
-    let hash_content = fs::read_to_string(hash_output_file.path())?;
-    assert!(hash_content.contains("  "), "Hash file should contain hash and filename");
-
-    Ok(())
-}
-
-#[test]
 fn test_hash_stdin() -> Result<(), Box<dyn std::error::Error>> {
     let build_status = Command::new("cargo")
         .args(["build"])
@@ -418,7 +359,7 @@ fn test_hash_stdin() -> Result<(), Box<dyn std::error::Error>> {
         .args([
             "dgst",
             "--algorithm", "sha256",
-            "--input", "-",  // stdin
+            "--input", "-",
         ])
         .stdin(std::process::Stdio::piped())
         .output()?;

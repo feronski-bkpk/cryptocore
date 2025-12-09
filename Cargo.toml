@@ -1,14 +1,14 @@
 [package]
 name = "cryptocore"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
-description = "Command-line utility for file encryption and decryption using AES-128 in various modes with secure key generation"
+description = "Command-line utility for file encryption and decryption using AES-128 with AEAD support"
 authors = ["feronski.bkpk@gmail.com"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 homepage = "https://github.com/feronski-bkpk/cryptocore"
 repository = "https://github.com/feronski-bkpk/cryptocore"
-keywords = ["crypto", "encryption", "aes", "cli", "csprng"]
+keywords = ["crypto", "encryption", "aes", "cli", "csprng", "aead", "gcm", "nist"]
 categories = ["command-line-utilities", "cryptography"]
 
 [profile.release]
@@ -45,3 +45,31 @@ path = "tests/test_hash.rs"
 [[test]]
 name = "hmac"
 path = "tests/test_hmac.rs"
+
+[[test]]
+name = "gcm"
+path = "tests/test_gcm_comprehensive.rs"
+
+[[test]]
+name = "aead"
+path = "tests/test_aead.rs"
+
+[[test]]
+name = "openssl_compat"
+path = "tests/test_openssl_compat.rs"
+
+[[test]]
+name = "integration_aead"
+path = "tests/test_integration_aead.rs"
+
+[[test]]
+name = "openssl_compatibility"
+path = "tests/test_openssl_compatibility.rs"
+
+[[test]]
+name = "gcm_large_data"
+path = "tests/test_gcm_large_data.rs"
+
+[[test]]
+name = "gcm_nonce_uniqueness"
+path = "tests/test_gcm_nonce_uniqueness.rs"
