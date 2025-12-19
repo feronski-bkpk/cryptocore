@@ -1,15 +1,11 @@
 [package]
 name = "cryptocore"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
-description = "Command-line utility for file encryption and decryption using AES-128 with AEAD support"
+description = "Command-line utility for file encryption and decryption using AES-128 with AEAD support and key derivation"
 authors = ["feronski.bkpk@gmail.com"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-homepage = "https://github.com/feronski-bkpk/cryptocore"
-repository = "https://github.com/feronski-bkpk/cryptocore"
-keywords = ["crypto", "encryption", "aes", "cli", "csprng", "aead", "gcm", "nist"]
-categories = ["command-line-utilities", "cryptography"]
 
 [profile.release]
 opt-level = 3
@@ -73,3 +69,11 @@ path = "tests/test_gcm_large_data.rs"
 [[test]]
 name = "gcm_nonce_uniqueness"
 path = "tests/test_gcm_nonce_uniqueness.rs"
+
+[[test]]
+name = "etm_integration"
+path = "tests/test_etm_integration.rs"
+
+[[test]]
+name = "kdf"
+path = "tests/test_kdf.rs"

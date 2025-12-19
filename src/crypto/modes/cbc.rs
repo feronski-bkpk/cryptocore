@@ -1,5 +1,6 @@
 use openssl::symm::{Cipher, Crypter, Mode};
 use anyhow::{Result, anyhow};
+use hex;
 
 const BLOCK_SIZE: usize = 16;
 
@@ -13,6 +14,28 @@ impl Cbc {
         Ok(Self { key })
     }
 
+    pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
+        if key.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key_array = [0u8; BLOCK_SIZE];
+        key_array.copy_from_slice(key);
+
+        Ok(Self { key: key_array })
+    }
+
+    pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
+        if key_bytes.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key = [0u8; BLOCK_SIZE];
+        key.copy_from_slice(key_bytes);
+
+        Ok(Self { key })
+    }
+
     fn encrypt_block(&self, block: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
         let cipher = Cipher::aes_128_ecb();
         let mut crypter = Crypter::new(cipher, Mode::Encrypt, &self.key, None)?;
@@ -20,7 +43,6 @@ impl Cbc {
 
         let mut output = vec![0; BLOCK_SIZE * 2];
 
-        // XOR с предыдущим блоком (или IV)
         let mut xored = vec![0; BLOCK_SIZE];
         for i in 0..BLOCK_SIZE {
             xored[i] = block[i] ^ iv[i];
@@ -40,7 +62,6 @@ impl Cbc {
         let count = crypter.update(block, &mut output)?;
         output.truncate(count);
 
-        // XOR с предыдущим блоком (или IV)
         for i in 0..BLOCK_SIZE {
             output[i] ^= iv[i];
         }
@@ -153,6 +174,28 @@ mod tests {
     }
 
     #[test]
+    fn test_cbc_from_bytes() {
+        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let iv = vec![0x00; 16];
+        let plaintext = b"Test from bytes";
+
+        let cbc_from_bytes = Cbc::new_from_bytes(&key_bytes).unwrap();
+        let cbc_from_hex = Cbc::new("00112233445566778899aabbccddeeff").unwrap();
+
+        let ciphertext1 = cbc_from_bytes.encrypt(plaintext, &iv).unwrap();
+        let ciphertext2 = cbc_from_hex.encrypt(plaintext, &iv).unwrap();
+
+        assert_eq!(ciphertext1, ciphertext2);
+
+        let decrypted1 = cbc_from_bytes.decrypt(&ciphertext1, &iv).unwrap();
+        let decrypted2 = cbc_from_hex.decrypt(&ciphertext2, &iv).unwrap();
+
+        assert_eq!(decrypted1, plaintext);
+        assert_eq!(decrypted2, plaintext);
+    }
+
+    #[test]
     fn test_pkcs7_pad_unpad() {
         let data = b"test";
         let padded = pkcs7_pad(data, 16);
@@ -181,5 +224,20 @@ mod tests {
             let decrypted = cbc.decrypt(&ciphertext, &iv).unwrap();
             assert_eq!(original, decrypted);
         }
+    }
+
+    #[test]
+    fn test_invalid_key_length() {
+        let short_key = vec![0x00; 15];
+        let result = Cbc::new_from_key_bytes(&short_key);
+        assert!(result.is_err(), "Should fail for 15-byte key");
+
+        let long_key = vec![0x00; 17];
+        let result = Cbc::new_from_key_bytes(&long_key);
+        assert!(result.is_err(), "Should fail for 17-byte key");
+
+        let correct_key = vec![0x00; 16];
+        let result = Cbc::new_from_key_bytes(&correct_key);
+        assert!(result.is_ok(), "Should succeed for 16-byte key");
     }
 }

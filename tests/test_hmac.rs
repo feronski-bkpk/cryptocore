@@ -6,7 +6,7 @@ use crate::hmac::HMAC;
 
 #[test]
 fn test_hmac_rfc_4231_case_1() {
-    let key = hex::decode("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b").unwrap(); // 20 bytes of 0x0b
+    let key = hex::decode("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b").unwrap();
     let data = b"Hi There";
     let expected = "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
 
@@ -120,4 +120,28 @@ fn test_hmac_different_keys() {
     let result2 = hmac2.compute(data).unwrap();
 
     assert_ne!(result1, result2);
+}
+
+#[test]
+fn test_hmac_rfc_4231_case_4() {
+    let key = hex::decode("0102030405060708090a0b0c0d0e0f10111213141516171819").unwrap();
+    let data = hex::decode("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd").unwrap();
+    let expected = "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b";
+
+    let hmac = HMAC::new(&key, HashType::Sha256);
+    let result = hmac.compute(&data).unwrap();
+
+    assert_eq!(result, expected, "RFC 4231 Test Case 4 failed");
+}
+
+#[test]
+fn test_hmac_rfc_4231_case_5() {
+    let key = hex::decode("0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c").unwrap();
+    let data = b"Test With Truncation";
+    let expected = "a3b6167473100ee06e0c796c2955552b";
+
+    let hmac = HMAC::new(&key, HashType::Sha256);
+    let result = hmac.compute(data).unwrap();
+
+    assert_eq!(&result[..32], expected, "RFC 4231 Test Case 5 failed");
 }

@@ -1,4 +1,4 @@
-.PHONY: all build release test clean install test-all test-modes test-csprng test-auto-key test-weak-key test-nist test-nist-full test-nist-quick test-openssl test-comprehensive test-comprehensive-linux dev-test integration-test prepare-test clean-nist help test-hash test-hmac test-security test-performance test-aead test-gcm test-etm test-openssl-aead test-catastrophic-failure
+.PHONY: all build release test clean install test-all test-modes test-csprng test-auto-key test-weak-key test-nist test-nist-full test-nist-quick test-openssl test-comprehensive test-comprehensive-linux dev-test integration-test prepare-test clean-nist help test-hash test-hmac test-security test-performance test-aead test-gcm test-etm test-openssl-aead test-catastrophic-failure test-kdf test-pbkdf2 test-hkdf test-derive-cli test-rfc6070
 
 all: build
 
@@ -17,14 +17,14 @@ test:
 clean:
 	@echo "Cleaning build artifacts..."
 	cargo clean
-	rm -f test.txt *.enc *.dec *.bin *.hmac *.sha256 *.sha3 *.gcm *.etm *.tag *.aad
+	rm -f test.txt *.enc *.dec *.bin *.hmac *.sha256 *.sha3 *.gcm *.etm *.tag *.aad *.key *.salt *.derived
 
 install: release
 	@echo "Installing cryptocore to /usr/local/bin/"
 	cp target/release/cryptocore /usr/local/bin/cryptocore
 
 # Полное тестирование всех компонентов
-test-all: test-csprng test-auto-key test-weak-key test-modes test-openssl test-hash test-hmac test-aead
+test-all: test-csprng test-auto-key test-weak-key test-modes test-openssl test-hash test-hmac test-aead test-kdf
 	@echo "All tests completed"
 
 # Тестирование всех режимов шифрования
@@ -34,6 +34,10 @@ test-modes: test-ecb test-cbc test-cfb test-ofb test-ctr test-gcm test-etm
 # AEAD tests (GCM + ETM)
 test-aead: test-gcm test-etm test-catastrophic-failure test-openssl-aead
 	@echo "All AEAD tests completed"
+
+# KDF tests (PBKDF2 + HKDF)
+test-kdf: test-pbkdf2 test-hkdf test-derive-cli test-rfc6070 test-salt-randomness test-pbkdf2-performance
+	@echo "All KDF tests completed"
 
 # CSPRNG specific tests
 test-csprng:
@@ -217,6 +221,87 @@ test-catastrophic-failure: prepare-test
 	rm -f test.gcm.* test.txt
 	@echo "Catastrophic failure tests completed"
 
+# PBKDF2 tests
+test-pbkdf2: prepare-test
+	@echo "Testing PBKDF2 key derivation..."
+
+	@echo "Testing basic PBKDF2 derivation..."
+	./target/release/cryptocore derive --password "password" --salt 73616c74 --iterations 1 --length 20 > test.pbkdf2.out
+	@cat test.pbkdf2.out | grep -q "0c60c80f961f0e71f3a9b524af6012062fe037a6" && echo "PBKDF2 vector 1: PASS" || echo "PBKDF2 vector 1: FAIL"
+
+	@echo "Testing with different iterations..."
+	./target/release/cryptocore derive --password "password" --salt 73616c74 --iterations 2 --length 20 > test.pbkdf2.iter2.out
+	@cat test.pbkdf2.iter2.out | grep -q "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957" && echo "PBKDF2 vector 2: PASS" || echo "PBKDF2 vector 2: FAIL"
+
+	@echo "Testing with custom salt..."
+	./target/release/cryptocore derive --password "MyPassword" --salt a1b2c3d4e5f67890 --iterations 100000 --length 32 > test.pbkdf2.custom.out
+	@cat test.pbkdf2.custom.out | wc -w | grep -q "2" && echo "PBKDF2 custom salt: PASS" || echo "PBKDF2 custom salt: FAIL"
+
+	rm -f test.pbkdf2.* test.txt
+	@echo "PBKDF2 tests completed"
+
+# HKDF tests
+test-hkdf: prepare-test
+	@echo "Testing HKDF (Hierarchical Key Derivation)..."
+
+	@echo "Running HKDF unit tests..."
+	cargo test --test kdf test_hkdf_derive_key -- --nocapture 2>/dev/null || echo "HKDF unit tests: FAILED (see cargo test for details)"
+
+	@echo "HKDF tests completed"
+
+# Test CLI derive command
+test-derive-cli: prepare-test
+	@echo "Testing CLI derive command functionality..."
+
+	@echo "Testing with provided salt..."
+	./target/release/cryptocore derive --password "test123" --salt a1b2c3d4e5f67890a1b2c3d4e5f67890 --iterations 1000 --length 32 > test.derive.out
+	@cat test.derive.out | wc -w | grep -q "2" && echo "Derive with provided salt: PASS" || echo "Derive with provided salt: FAIL"
+
+	@echo "Testing with auto-generated salt..."
+	./target/release/cryptocore derive --password "test123" --iterations 1000 --length 32 > test.derive.auto.out
+	@cat test.derive.auto.out | wc -w | grep -q "2" && echo "Derive with auto salt: PASS" || echo "Derive with auto salt: FAIL"
+
+	@echo "Testing output to file..."
+	./target/release/cryptocore derive --password "test123" --salt a1b2c3d4e5f67890 --iterations 1000 --length 32 --output test.key.derived 2>&1 | grep -q "SUCCESS" && echo "Derive output to file: PASS" || echo "Derive output to file: FAIL"
+	@test -f test.key.derived && echo "Derived key file exists: PASS" || echo "Derived key file exists: FAIL"
+
+	@echo "Testing various lengths..."
+	for length in 16 24 32 48 64; do \
+		./target/release/cryptocore derive --password "test" --salt "73616c74" --iterations 100 --length $$length > test.derive.length.$$length; \
+		cat test.derive.length.$$length | cut -d' ' -f1 | xxd -r -p | wc -c | grep -q "^$$length$$" && echo "Length $$length: PASS" || echo "Length $$length: FAIL"; \
+		rm -f test.derive.length.$$length; \
+	done
+
+	rm -f test.derive.* test.key.derived test.txt
+	@echo "CLI derive tests completed"
+
+# Test RFC 6070 vectors
+test-rfc6070: prepare-test
+	@echo "Testing RFC 6070 test vectors..."
+
+	@echo "Running RFC 6070 test suite..."
+	cargo test --test kdf test_pbkdf2_rfc6070 -- --nocapture 2>/dev/null || echo "RFC 6070 tests: FAILED (see cargo test for details)"
+
+	@echo "RFC 6070 tests completed"
+
+# Test salt randomness
+test-salt-randomness:
+	@echo "Testing salt randomness generation..."
+
+	@echo "Running salt randomness tests..."
+	cargo test --test kdf test_salt_randomness -- --nocapture 2>/dev/null || echo "Salt randomness tests: FAILED (see cargo test for details)"
+
+	@echo "Salt randomness tests completed"
+
+# Test PBKDF2 performance
+test-pbkdf2-performance:
+	@echo "Testing PBKDF2 performance..."
+
+	@echo "Running PBKDF2 performance tests..."
+	cargo test --test kdf test_pbkdf2_performance -- --nocapture 2>/dev/null || echo "PBKDF2 performance tests: FAILED (see cargo test for details)"
+
+	@echo "PBKDF2 performance tests completed"
+
 # NIST test data preparation
 test-nist:
 	@echo "Preparing NIST test data..."
@@ -340,8 +425,20 @@ test-openssl: prepare-test
 		openssl enc -aes-128-cbc -d -K 00112233445566778899aabbccddeeff -iv $$(xxd -p extracted_iv.bin | tr -d '\n') -in ciphertext_only.bin -out openssl_decrypted2.txt; \
 		diff openssl_test.txt openssl_decrypted2.txt && echo "OurTool->OpenSSL: PASS" || echo "OurTool->OpenSSL: FAIL"; \
 		\
+		# Test PBKDF2 with OpenSSL \
+		echo "Testing PBKDF2 with OpenSSL..."; \
+		./target/release/cryptocore derive --password "test" --salt 1234567890abcdef --iterations 1000 --length 32 > our_pbkdf2.txt; \
+		openssl kdf -keylen 32 -kdfopt pass:test -kdfopt salt:1234567890abcdef -kdfopt iter:1000 PBKDF2 > openssl_pbkdf2.txt 2>/dev/null; \
+		if [ $$? -eq 0 ]; then \
+			cat our_pbkdf2.txt | cut -d' ' -f1 > our_key.txt; \
+			diff our_key.txt openssl_pbkdf2.txt >/dev/null 2>&1 && echo "PBKDF2 OpenSSL compat: PASS" || echo "PBKDF2 OpenSSL compat: FAIL (key mismatch)"; \
+			rm -f our_key.txt openssl_pbkdf2.txt; \
+		else \
+			echo "PBKDF2 OpenSSL compat: SKIP (OpenSSL version too old)"; \
+		fi; \
+		\
 		# Cleanup \
-		rm -f openssl_test.txt openssl_encrypted.bin openssl_decrypted.txt our_encrypted.bin extracted_iv.bin ciphertext_only.bin openssl_decrypted2.txt; \
+		rm -f openssl_test.txt openssl_encrypted.bin openssl_decrypted.txt our_encrypted.bin extracted_iv.bin ciphertext_only.bin openssl_decrypted2.txt our_pbkdf2.txt; \
 	else \
 		echo "OpenSSL not found, skipping interoperability tests"; \
 	fi
@@ -413,7 +510,7 @@ clean-nist:
 	fi
 
 # Development quick test
-dev-test: prepare-test test-csprng test-auto-key test-ecb test-cbc test-hash test-hmac test-gcm
+dev-test: prepare-test test-csprng test-auto-key test-ecb test-cbc test-hash test-hmac test-gcm test-pbkdf2
 	@echo "Development tests completed"
 	rm -f test.txt
 
@@ -426,7 +523,7 @@ quick: build test-comprehensive
 	@echo "Quick build and test completed"
 
 # Security-focused testing
-test-security: test-csprng test-weak-key test-nist-quick test-hmac test-catastrophic-failure
+test-security: test-csprng test-weak-key test-nist-quick test-hmac test-catastrophic-failure test-salt-randomness
 	@echo "Security tests completed"
 
 # Performance testing
@@ -452,6 +549,11 @@ test-performance: release
 			--aad "testaad" \
 			--input perf_test_10mb.bin \
 			--output perf_test_10mb.gcm.enc; \
+		echo "Testing PBKDF2 performance..."; \
+		for iter in 10000 100000 1000000; do \
+			echo "PBKDF2 with $$iter iterations:"; \
+			time ./target/release/cryptocore derive --password "MySecurePassword" --salt a1b2c3d4e5f67890 --iterations $$iter --length 32 >/dev/null; \
+		done; \
 		rm -f perf_test_10mb.bin perf_test_10mb.enc perf_test_10mb.gcm.enc; \
 	fi
 
@@ -471,6 +573,10 @@ test-unit-aead:
 	cargo test --test aead -- --nocapture
 	cargo test --test gcm -- --nocapture
 
+test-unit-kdf:
+	@echo "Running unit tests for KDF modules..."
+	cargo test --test kdf -- --nocapture
+
 # Validation tests for AEAD
 test-validate-aead:
 	@echo "Validating AEAD implementation..."
@@ -487,9 +593,56 @@ test-validate-aead:
 		echo "AEAD unit tests: FAIL"; \
 	fi
 
+# Validation tests for KDF
+test-validate-kdf:
+	@echo "Validating KDF implementation..."
+	@echo "Checking PBKDF2 implementation..."
+	@if cargo test --test kdf 2>&1 | grep -q "test result: ok"; then \
+		echo "KDF unit tests: PASS"; \
+	else \
+		echo "KDF unit tests: FAIL"; \
+	fi
+	@echo "Checking KDF CLI functionality..."
+	@if ./target/release/cryptocore derive --help 2>&1 | grep -q "derive"; then \
+		echo "KDF CLI: PASS"; \
+	else \
+		echo "KDF CLI: FAIL"; \
+	fi
+
+# Sprint 7 specific tests
+test-sprint7: test-kdf test-derive-cli test-rfc6070 test-pbkdf2-performance test-validate-kdf
+	@echo "Sprint 7 (KDF) tests completed"
+
+# End-to-end example scenarios
+test-examples: prepare-test
+	@echo "Testing end-to-end example scenarios..."
+
+	@echo "Example 1: Basic key derivation..."
+	./target/release/cryptocore derive --password "MySecurePassword" --salt a1b2c3d4e5f67890 --iterations 100000 --length 32 > example1.key
+	@test -s example1.key && echo "Example 1: PASS" || echo "Example 1: FAIL"
+
+	@echo "Example 2: Key derivation with auto-generated salt..."
+	./target/release/cryptocore derive --password "AnotherPassword" --iterations 500000 --length 16 > example2.key
+	@cat example2.key | wc -w | grep -q "2" && echo "Example 2: PASS" || echo "Example 2: FAIL"
+
+	@echo "Example 3: Save derived key to file..."
+	./target/release/cryptocore derive --password "app_key" --salt fixedappsalt --iterations 10000 --length 32 --output app.key.derived
+	@test -f app.key.derived && echo "Example 3: PASS" || echo "Example 3: FAIL"
+
+	@echo "Example 4: Use derived key for encryption..."
+	KEY=$$(cat example1.key | cut -d' ' -f1); \
+	./target/release/cryptocore crypto --algorithm aes --mode cbc --operation encrypt \
+		--key $$KEY \
+		--input test.txt \
+		--output example4.enc
+	@test -f example4.enc && echo "Example 4: PASS" || echo "Example 4: FAIL"
+
+	rm -f example*.key example*.enc app.key.derived test.txt
+	@echo "Example scenarios completed"
+
 # Help target
 help:
-	@echo "CryptoCore Makefile Targets:"
+	@echo "CryptoCore Makefile Targets (v0.7.0 with KDF):"
 	@echo ""
 	@echo "Build Targets:"
 	@echo "  build          - Build debug version"
@@ -502,6 +655,13 @@ help:
 	@echo "  test-all       - Run all component tests"
 	@echo "  test-modes     - Test all encryption modes"
 	@echo "  test-aead      - Test AEAD modes (GCM and ETM)"
+	@echo "  test-kdf       - Test KDF functions (PBKDF2 and HKDF)"
+	@echo "  test-pbkdf2    - Test PBKDF2 key derivation"
+	@echo "  test-hkdf      - Test HKDF hierarchical key derivation"
+	@echo "  test-derive-cli - Test CLI derive command"
+	@echo "  test-rfc6070   - Test RFC 6070 PBKDF2 vectors"
+	@echo "  test-salt-randomness - Test salt randomness generation"
+	@echo "  test-pbkdf2-performance - Test PBKDF2 performance"
 	@echo "  test-gcm       - Test GCM mode"
 	@echo "  test-etm       - Test Encrypt-then-MAC mode"
 	@echo "  test-catastrophic-failure - Test authentication failure handling"
@@ -512,13 +672,17 @@ help:
 	@echo "  test-hash-all  - Test all hash and HMAC functionality"
 	@echo "  test-nist      - Generate NIST test data"
 	@echo "  test-nist-full - Run full NIST STS suite"
-	@echo "  test-nist-quick- Quick NIST validation"
-	@echo "  test-openssl   - Test OpenSSL interoperability (classic modes)"
+	@echo "  test-nist-quick - Quick NIST validation"
+	@echo "  test-openssl   - Test OpenSSL interoperability (classic modes + PBKDF2)"
 	@echo "  test-openssl-aead - Test OpenSSL interoperability (GCM)"
 	@echo "  test-security  - Run security-focused tests"
 	@echo "  test-performance - Run performance tests"
 	@echo "  test-unit-aead - Run unit tests for AEAD modules"
+	@echo "  test-unit-kdf  - Run unit tests for KDF modules"
 	@echo "  test-validate-aead - Validate AEAD implementation"
+	@echo "  test-validate-kdf - Validate KDF implementation"
+	@echo "  test-sprint7   - Sprint 7 specific tests"
+	@echo "  test-examples  - End-to-end example scenarios"
 	@echo ""
 	@echo "Development:"
 	@echo "  dev-test       - Quick development tests"
@@ -532,16 +696,19 @@ help:
 	@echo "Cleanup:"
 	@echo "  clean-nist     - Clean NIST test data"
 	@echo ""
-	@echo "Sprint 6 Requirements Coverage:"
-	@echo "  ✓ test-gcm - Tests GCM implementation (AEAD-2)"
-	@echo "  ✓ test-etm - Tests Encrypt-then-MAC (AEAD-1)"
-	@echo "  ✓ test-catastrophic-failure - Tests CLI-5 requirement"
-	@echo "  ✓ test-openssl-aead - Tests TEST-8 requirement"
+	@echo "Sprint 7 Requirements Coverage:"
+	@echo "  ✓ test-pbkdf2 - Tests PBKDF2-HMAC-SHA256 implementation (KDF-1)"
+	@echo "  ✓ test-hkdf   - Tests HKDF hierarchical key derivation (KDF-4)"
+	@echo "  ✓ test-derive-cli - Tests CLI derive command (CLI-1 to CLI-5)"
+	@echo "  ✓ test-rfc6070 - Tests RFC 6070 test vectors (TEST-1)"
+	@echo "  ✓ test-salt-randomness - Tests random salt generation (TEST-7)"
+	@echo "  ✓ test-pbkdf2-performance - Tests PBKDF2 performance (TEST-8)"
 	@echo ""
 	@echo "Example usage:"
 	@echo "  make dev-test          # Quick development cycle"
-	@echo "  make test-aead         # Test all AEAD functionality"
+	@echo "  make test-kdf          # Test all KDF functionality"
+	@echo "  make test-sprint7      # Sprint 7 specific tests"
 	@echo "  make test-security     # Security-focused testing"
 	@echo "  make test-all          # Complete test suite"
-	@echo "  make test-gcm          # Test GCM mode specifically"
-	@echo "  make test-validate-aead # Validate AEAD implementation"
+	@echo "  make test-examples     # End-to-end example scenarios"
+	@echo "  make test-derive-cli   # Test CLI derive command specifically"

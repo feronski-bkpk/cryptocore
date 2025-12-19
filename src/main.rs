@@ -4,6 +4,7 @@ mod csprng;
 mod file;
 mod hash;
 mod mac;
+mod kdf;
 
 use clap::Parser;
 use cli::{Cli, Command, Algorithm, Mode, Operation};
@@ -12,6 +13,7 @@ use crypto::aead::EncryptThenMac;
 use csprng::Csprng;
 use file::{read_file, write_file, extract_iv_from_file, prepend_iv_to_data};
 use hash::HashType;
+use kdf::pbkdf2_hmac_sha256;
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 use hex;
@@ -26,14 +28,6 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let output_path = match cli.get_output_path() {
-        Some(path) => path,
-        None => {
-            eprintln!("[ERROR] Failed to determine output path");
-            std::process::exit(1);
-        }
-    };
-
     match cli.command {
         Command::Crypto {
             algorithm,
@@ -45,16 +39,31 @@ fn main() -> Result<()> {
             nonce,
             aad,
             base_mode,
-            output: _,
+            output,
         } => {
             if algorithm != Algorithm::Aes {
                 eprintln!("[ERROR] Only AES algorithm is currently supported");
                 std::process::exit(1);
             }
 
+            let output_path = output.or_else(|| {
+                let default_name = match input.to_str() {
+                    Some("-") => match operation {
+                        Operation::Encrypt => "output.enc".to_string(),
+                        Operation::Decrypt => "output.dec".to_string(),
+                    },
+                    Some(name) => match operation {
+                        Operation::Encrypt => format!("{}.enc", name),
+                        Operation::Decrypt => format!("{}.dec", name),
+                    },
+                    None => "output".to_string(),
+                };
+                Some(PathBuf::from(default_name))
+            });
+
             match operation {
-                Operation::Encrypt => handle_encryption(&mode, key, &input, &output_path, iv, nonce, aad, base_mode)?,
-                Operation::Decrypt => handle_decryption(&mode, key, &input, &output_path, iv, nonce, aad, base_mode)?,
+                Operation::Encrypt => handle_encryption(&mode, key, &input, output_path.as_ref(), iv, nonce, aad, base_mode)?,
+                Operation::Decrypt => handle_decryption(&mode, key, &input, output_path.as_ref(), iv, nonce, aad, base_mode)?,
             }
         }
         Command::Dgst {
@@ -74,6 +83,54 @@ fn main() -> Result<()> {
                 handle_hashing(hash_type, &input, output)?;
             }
         }
+        Command::Derive { args } => {
+            handle_key_derivation(args)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_key_derivation(args: cli::DeriveArgs) -> Result<()> {
+    println!("[INFO] Deriving key using PBKDF2-HMAC-SHA256");
+    println!("[INFO] Password length: {} characters", args.password.len());
+    println!("[INFO] Iterations: {}", args.iterations);
+    println!("[INFO] Key length: {} bytes", args.length);
+
+    let password_bytes = args.password.as_bytes();
+
+    let salt_bytes = if let Some(salt_hex) = &args.salt {
+        let salt = hex::decode(salt_hex)?;
+        println!("[INFO] Using provided salt: {}", salt_hex);
+        salt
+    } else {
+        let random_salt = Csprng::generate_salt()?;
+        println!("[INFO] Generated random salt (hex): {}", hex::encode(&random_salt));
+        random_salt.to_vec()
+    };
+
+    let derived_key = pbkdf2_hmac_sha256(password_bytes, &salt_bytes, args.iterations, args.length)?;
+    let key_hex = hex::encode(&derived_key);
+
+    if let Some(output_path) = &args.output {
+        write_file(output_path, &derived_key)?;
+        println!("[SUCCESS] Key derivation completed successfully");
+        println!("[INFO] Derived key saved to: {}", output_path.display());
+        println!("[INFO] Key (hex): {}", key_hex);
+        println!("[INFO] Salt (hex): {}", hex::encode(salt_bytes));
+    } else {
+        eprintln!("[INFO] Deriving key using PBKDF2-HMAC-SHA256");
+        eprintln!("[INFO] Password length: {} characters", args.password.len());
+        eprintln!("[INFO] Iterations: {}", args.iterations);
+        eprintln!("[INFO] Key length: {} bytes", args.length);
+        if let Some(salt_hex) = &args.salt {
+            eprintln!("[INFO] Using provided salt: {}", salt_hex);
+        } else {
+            eprintln!("[INFO] Generated random salt (hex): {}", hex::encode(&salt_bytes));
+        }
+        eprintln!("[SUCCESS] Key derivation completed successfully");
+
+        println!("{} {}", key_hex, hex::encode(salt_bytes));
     }
 
     Ok(())
@@ -83,7 +140,7 @@ fn handle_encryption(
     mode: &Mode,
     key: Option<String>,
     input_path: &PathBuf,
-    output_path: &PathBuf,
+    output_path: Option<&PathBuf>,
     iv: Option<String>,
     nonce: Option<String>,
     aad: Option<String>,
@@ -92,6 +149,18 @@ fn handle_encryption(
     if iv.is_some() && *mode != Mode::Gcm && *mode != Mode::Etm {
         eprintln!("[WARNING] IV should not be provided for encryption - it will be generated automatically");
     }
+
+    let output_path = match output_path {
+        Some(path) => path.clone(),
+        None => {
+            let default_name = match input_path.to_str() {
+                Some("-") => "output.enc".to_string(),
+                Some(name) => format!("{}.enc", name),
+                None => "output.enc".to_string(),
+            };
+            PathBuf::from(default_name)
+        }
+    };
 
     let plaintext = if input_path.to_str() == Some("-") {
         let mut buffer = Vec::new();
@@ -119,7 +188,7 @@ fn handle_encryption(
         Mode::Ecb => {
             let ecb = Ecb::new(&key_hex)?;
             let ciphertext = ecb.encrypt(&plaintext, &[])?;
-            write_file(output_path, &ciphertext)?;
+            write_file(&output_path, &ciphertext)?;
             println!("[SUCCESS] ECB encryption completed successfully");
         }
         Mode::Cbc => {
@@ -127,7 +196,7 @@ fn handle_encryption(
             let iv_bytes = Csprng::generate_iv()?;
             let ciphertext = cbc.encrypt(&plaintext, &iv_bytes)?;
             let output_data = prepend_iv_to_data(&iv_bytes, &ciphertext);
-            write_file(output_path, &output_data)?;
+            write_file(&output_path, &output_data)?;
             println!("[SUCCESS] CBC encryption completed successfully");
             println!("[INFO] IV (hex): {}", hex::encode(iv_bytes));
         }
@@ -136,7 +205,7 @@ fn handle_encryption(
             let iv_bytes = Csprng::generate_iv()?;
             let ciphertext = cfb.encrypt(&plaintext, &iv_bytes)?;
             let output_data = prepend_iv_to_data(&iv_bytes, &ciphertext);
-            write_file(output_path, &output_data)?;
+            write_file(&output_path, &output_data)?;
             println!("[SUCCESS] CFB encryption completed successfully");
             println!("[INFO] IV (hex): {}", hex::encode(iv_bytes));
         }
@@ -145,7 +214,7 @@ fn handle_encryption(
             let iv_bytes = Csprng::generate_iv()?;
             let ciphertext = ofb.encrypt(&plaintext, &iv_bytes)?;
             let output_data = prepend_iv_to_data(&iv_bytes, &ciphertext);
-            write_file(output_path, &output_data)?;
+            write_file(&output_path, &output_data)?;
             println!("[SUCCESS] OFB encryption completed successfully");
             println!("[INFO] IV (hex): {}", hex::encode(iv_bytes));
         }
@@ -154,7 +223,7 @@ fn handle_encryption(
             let iv_bytes = Csprng::generate_iv()?;
             let ciphertext = ctr.encrypt(&plaintext, &iv_bytes)?;
             let output_data = prepend_iv_to_data(&iv_bytes, &ciphertext);
-            write_file(output_path, &output_data)?;
+            write_file(&output_path, &output_data)?;
             println!("[SUCCESS] CTR encryption completed successfully");
             println!("[INFO] IV (hex): {}", hex::encode(iv_bytes));
         }
@@ -186,7 +255,7 @@ fn handle_encryption(
             }
 
             let ciphertext = gcm.encrypt_with_aad(&plaintext, &nonce_bytes, &aad_bytes)?;
-            write_file(output_path, &ciphertext)?;
+            write_file(&output_path, &ciphertext)?;
             println!("[SUCCESS] GCM encryption completed successfully");
         }
         Mode::Etm => {
@@ -196,114 +265,44 @@ fn handle_encryption(
 
             let aead = EncryptThenMac::new(&key_hex)?;
 
+            let iv_bytes = if let Some(iv_hex) = iv {
+                let iv_str = iv_hex.trim_start_matches('@');
+                hex::decode(iv_str)?
+            } else {
+                Csprng::generate_iv()?.to_vec()
+            };
+
+            let aad_bytes = if let Some(aad_hex) = aad {
+                let aad_str = aad_hex.trim_start_matches('@');
+                hex::decode(aad_str)?
+            } else {
+                Vec::new()
+            };
+
+            if !aad_bytes.is_empty() {
+                println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
+            }
+
             match base_mode {
                 Mode::Cbc => {
-                    let cbc = Cbc::new(&key_hex)?;
-                    let iv_bytes = if let Some(iv_hex) = iv {
-                        let iv_str = iv_hex.trim_start_matches('@');
-                        hex::decode(iv_str)?
-                    } else {
-                        Csprng::generate_iv()?.to_vec()
-                    };
-
-                    let aad_bytes = if let Some(aad_hex) = aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    let ciphertext = aead.encrypt(&cbc, &plaintext, &iv_bytes, &aad_bytes)?;
-                    write_file(output_path, &ciphertext)?;
+                    let ciphertext = aead.encrypt::<Cbc>(&plaintext, &iv_bytes, &aad_bytes)?;
+                    write_file(&output_path, &ciphertext)?;
                 }
                 Mode::Ctr => {
-                    let ctr = Ctr::new(&key_hex)?;
-                    let iv_bytes = if let Some(iv_hex) = iv {
-                        let iv_str = iv_hex.trim_start_matches('@');
-                        hex::decode(iv_str)?
-                    } else {
-                        Csprng::generate_iv()?.to_vec()
-                    };
-
-                    let aad_bytes = if let Some(aad_hex) = aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    let ciphertext = aead.encrypt(&ctr, &plaintext, &iv_bytes, &aad_bytes)?;
-                    write_file(output_path, &ciphertext)?;
+                    let ciphertext = aead.encrypt::<Ctr>(&plaintext, &iv_bytes, &aad_bytes)?;
+                    write_file(&output_path, &ciphertext)?;
                 }
                 Mode::Cfb => {
-                    let cfb = Cfb::new(&key_hex)?;
-                    let iv_bytes = if let Some(iv_hex) = iv {
-                        let iv_str = iv_hex.trim_start_matches('@');
-                        hex::decode(iv_str)?
-                    } else {
-                        Csprng::generate_iv()?.to_vec()
-                    };
-
-                    let aad_bytes = if let Some(aad_hex) = aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    let ciphertext = aead.encrypt(&cfb, &plaintext, &iv_bytes, &aad_bytes)?;
-                    write_file(output_path, &ciphertext)?;
+                    let ciphertext = aead.encrypt::<Cfb>(&plaintext, &iv_bytes, &aad_bytes)?;
+                    write_file(&output_path, &ciphertext)?;
                 }
                 Mode::Ofb => {
-                    let ofb = Ofb::new(&key_hex)?;
-                    let iv_bytes = if let Some(iv_hex) = iv {
-                        let iv_str = iv_hex.trim_start_matches('@');
-                        hex::decode(iv_str)?
-                    } else {
-                        Csprng::generate_iv()?.to_vec()
-                    };
-
-                    let aad_bytes = if let Some(aad_hex) = aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    let ciphertext = aead.encrypt(&ofb, &plaintext, &iv_bytes, &aad_bytes)?;
-                    write_file(output_path, &ciphertext)?;
+                    let ciphertext = aead.encrypt::<Ofb>(&plaintext, &iv_bytes, &aad_bytes)?;
+                    write_file(&output_path, &ciphertext)?;
                 }
                 Mode::Ecb => {
-                    let ecb = Ecb::new(&key_hex)?;
-                    let aad_bytes = if let Some(aad_hex) = aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    let ciphertext = aead.encrypt(&ecb, &plaintext, &[], &aad_bytes)?;
-                    write_file(output_path, &ciphertext)?;
+                    let ciphertext = aead.encrypt::<Ecb>(&plaintext, &[], &aad_bytes)?;
+                    write_file(&output_path, &ciphertext)?;
                 }
                 _ => {
                     return Err(anyhow!("Invalid base mode for ETM: {:?}", base_mode));
@@ -322,7 +321,7 @@ fn handle_decryption(
     mode: &Mode,
     key: Option<String>,
     input_path: &PathBuf,
-    output_path: &PathBuf,
+    output_path: Option<&PathBuf>,
     iv: Option<String>,
     _nonce: Option<String>,
     aad: Option<String>,
@@ -331,6 +330,18 @@ fn handle_decryption(
     let key_hex = key.ok_or_else(|| anyhow!("Key is required for decryption"))?
         .trim_start_matches('@')
         .to_string();
+
+    let output_path = match output_path {
+        Some(path) => path.clone(),
+        None => {
+            let default_name = match input_path.to_str() {
+                Some("-") => "output.dec".to_string(),
+                Some(name) => format!("{}.dec", name),
+                None => "output.dec".to_string(),
+            };
+            PathBuf::from(default_name)
+        }
+    };
 
     let input_data = if input_path.to_str() == Some("-") {
         let mut buffer = Vec::new();
@@ -344,7 +355,7 @@ fn handle_decryption(
         Mode::Ecb => {
             let ecb = Ecb::new(&key_hex)?;
             let plaintext = ecb.decrypt(&input_data, &[])?;
-            write_file(output_path, &plaintext)?;
+            write_file(&output_path, &plaintext)?;
             println!("[SUCCESS] ECB decryption completed successfully");
         }
         Mode::Cbc | Mode::Cfb | Mode::Ofb | Mode::Ctr => {
@@ -380,7 +391,7 @@ fn handle_decryption(
                 _ => unreachable!(),
             };
 
-            write_file(output_path, &plaintext)?;
+            write_file(&output_path, &plaintext)?;
             println!("[SUCCESS] {:?} decryption completed successfully", mode);
         }
         Mode::Gcm => {
@@ -403,13 +414,13 @@ fn handle_decryption(
 
             match gcm.decrypt_with_aad(&input_data, &aad_bytes) {
                 Ok(plaintext) => {
-                    write_file(output_path, &plaintext)?;
+                    write_file(&output_path, &plaintext)?;
                     println!("[SUCCESS] GCM decryption completed successfully");
                 }
                 Err(e) => {
                     if e.to_string().contains("Authentication failed") {
                         if output_path.exists() {
-                            std::fs::remove_file(output_path)
+                            std::fs::remove_file(&output_path)
                                 .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                         }
 
@@ -418,7 +429,7 @@ fn handle_decryption(
                         std::process::exit(1);
                     } else {
                         if output_path.exists() {
-                            std::fs::remove_file(output_path)
+                            std::fs::remove_file(&output_path)
                                 .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                         }
                         return Err(e);
@@ -433,28 +444,27 @@ fn handle_decryption(
 
             let aead = EncryptThenMac::new(&key_hex)?;
 
+            let aad_bytes = if let Some(aad_hex) = &aad {
+                let aad_str = aad_hex.trim_start_matches('@');
+                hex::decode(aad_str)?
+            } else {
+                Vec::new()
+            };
+
+            if !aad_bytes.is_empty() {
+                println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
+            }
+
             match base_mode {
                 Mode::Cbc => {
-                    let cbc = Cbc::new(&key_hex)?;
-                    let aad_bytes = if let Some(aad_hex) = &aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    match aead.decrypt(&cbc, &input_data, &aad_bytes) {
+                    match aead.decrypt::<Cbc>(&input_data, &aad_bytes) {
                         Ok(plaintext) => {
-                            write_file(output_path, &plaintext)?;
+                            write_file(&output_path, &plaintext)?;
                             println!("[SUCCESS] ETM decryption completed successfully");
                         }
                         Err(e) if e.to_string().contains("Authentication failed") => {
                             if output_path.exists() {
-                                std::fs::remove_file(output_path)
+                                std::fs::remove_file(&output_path)
                                     .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                             }
                             eprintln!("[ERROR] Authentication failed: MAC mismatch");
@@ -466,26 +476,14 @@ fn handle_decryption(
                     }
                 }
                 Mode::Ctr => {
-                    let ctr = Ctr::new(&key_hex)?;
-                    let aad_bytes = if let Some(aad_hex) = &aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    match aead.decrypt(&ctr, &input_data, &aad_bytes) {
+                    match aead.decrypt::<Ctr>(&input_data, &aad_bytes) {
                         Ok(plaintext) => {
-                            write_file(output_path, &plaintext)?;
+                            write_file(&output_path, &plaintext)?;
                             println!("[SUCCESS] ETM decryption completed successfully");
                         }
                         Err(e) if e.to_string().contains("Authentication failed") => {
                             if output_path.exists() {
-                                std::fs::remove_file(output_path)
+                                std::fs::remove_file(&output_path)
                                     .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                             }
                             eprintln!("[ERROR] Authentication failed: MAC mismatch");
@@ -497,26 +495,14 @@ fn handle_decryption(
                     }
                 }
                 Mode::Cfb => {
-                    let cfb = Cfb::new(&key_hex)?;
-                    let aad_bytes = if let Some(aad_hex) = &aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    match aead.decrypt(&cfb, &input_data, &aad_bytes) {
+                    match aead.decrypt::<Cfb>(&input_data, &aad_bytes) {
                         Ok(plaintext) => {
-                            write_file(output_path, &plaintext)?;
+                            write_file(&output_path, &plaintext)?;
                             println!("[SUCCESS] ETM decryption completed successfully");
                         }
                         Err(e) if e.to_string().contains("Authentication failed") => {
                             if output_path.exists() {
-                                std::fs::remove_file(output_path)
+                                std::fs::remove_file(&output_path)
                                     .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                             }
                             eprintln!("[ERROR] Authentication failed: MAC mismatch");
@@ -528,26 +514,14 @@ fn handle_decryption(
                     }
                 }
                 Mode::Ofb => {
-                    let ofb = Ofb::new(&key_hex)?;
-                    let aad_bytes = if let Some(aad_hex) = &aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    match aead.decrypt(&ofb, &input_data, &aad_bytes) {
+                    match aead.decrypt::<Ofb>(&input_data, &aad_bytes) {
                         Ok(plaintext) => {
-                            write_file(output_path, &plaintext)?;
+                            write_file(&output_path, &plaintext)?;
                             println!("[SUCCESS] ETM decryption completed successfully");
                         }
                         Err(e) if e.to_string().contains("Authentication failed") => {
                             if output_path.exists() {
-                                std::fs::remove_file(output_path)
+                                std::fs::remove_file(&output_path)
                                     .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                             }
                             eprintln!("[ERROR] Authentication failed: MAC mismatch");
@@ -559,26 +533,14 @@ fn handle_decryption(
                     }
                 }
                 Mode::Ecb => {
-                    let ecb = Ecb::new(&key_hex)?;
-                    let aad_bytes = if let Some(aad_hex) = &aad {
-                        let aad_str = aad_hex.trim_start_matches('@');
-                        hex::decode(aad_str)?
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !aad_bytes.is_empty() {
-                        println!("[INFO] AAD provided ({} bytes)", aad_bytes.len());
-                    }
-
-                    match aead.decrypt(&ecb, &input_data, &aad_bytes) {
+                    match aead.decrypt::<Ecb>(&input_data, &aad_bytes) {
                         Ok(plaintext) => {
-                            write_file(output_path, &plaintext)?;
+                            write_file(&output_path, &plaintext)?;
                             println!("[SUCCESS] ETM decryption completed successfully");
                         }
                         Err(e) if e.to_string().contains("Authentication failed") => {
                             if output_path.exists() {
-                                std::fs::remove_file(output_path)
+                                std::fs::remove_file(&output_path)
                                     .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
                             }
                             eprintln!("[ERROR] Authentication failed: MAC mismatch");

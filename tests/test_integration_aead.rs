@@ -1,6 +1,6 @@
 use anyhow::Result;
 use cryptocore::crypto::aead::EncryptThenMac;
-use cryptocore::crypto::{Gcm, Cbc, Ctr, Cfb, Ofb, Ecb, BlockMode};
+use cryptocore::crypto::{Gcm, Cbc, Ctr, Cfb, Ofb, Ecb};
 use std::fs;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -58,20 +58,25 @@ fn test_etm_case(description: &str, base_mode: &str, plaintext: &[u8], aad_hex: 
 
     let aead = EncryptThenMac::new(key)?;
 
-    let base_crypto: Box<dyn BlockMode> = match base_mode {
-        "CBC" => Box::new(Cbc::new(key)?),
-        "CTR" => Box::new(Ctr::new(key)?),
-        "CFB" => Box::new(Cfb::new(key)?),
-        "OFB" => Box::new(Ofb::new(key)?),
-        "ECB" => Box::new(Ecb::new(key)?),
+    let ciphertext = match base_mode {
+        "CBC" => aead.encrypt::<Cbc>(plaintext, &iv, &aad)?,
+        "CTR" => aead.encrypt::<Ctr>(plaintext, &iv, &aad)?,
+        "CFB" => aead.encrypt::<Cfb>(plaintext, &iv, &aad)?,
+        "OFB" => aead.encrypt::<Ofb>(plaintext, &iv, &aad)?,
+        "ECB" => aead.encrypt::<Ecb>(plaintext, &[], &aad)?,
         _ => return Err(anyhow::anyhow!("Unknown base mode: {}", base_mode)),
     };
 
-    let ciphertext = aead.encrypt(&*base_crypto, plaintext, &iv, &aad)?;
-
     ciphertext_file.write_all(&ciphertext)?;
 
-    let decrypted = aead.decrypt(&*base_crypto, &ciphertext, &aad)?;
+    let decrypted = match base_mode {
+        "CBC" => aead.decrypt::<Cbc>(&ciphertext, &aad)?,
+        "CTR" => aead.decrypt::<Ctr>(&ciphertext, &aad)?,
+        "CFB" => aead.decrypt::<Cfb>(&ciphertext, &aad)?,
+        "OFB" => aead.decrypt::<Ofb>(&ciphertext, &aad)?,
+        "ECB" => aead.decrypt::<Ecb>(&ciphertext, &aad)?,
+        _ => return Err(anyhow::anyhow!("Unknown base mode: {}", base_mode)),
+    };
 
     assert_eq!(plaintext, &decrypted[..], "ETM decryption failed for {} with base mode {}", description, base_mode);
 
@@ -81,7 +86,15 @@ fn test_etm_case(description: &str, base_mode: &str, plaintext: &[u8], aad_hex: 
         aad.iter().map(|b| b ^ 0xFF).collect()
     };
 
-    let wrong_result = aead.decrypt(&*base_crypto, &ciphertext, &wrong_aad);
+    let wrong_result = match base_mode {
+        "CBC" => aead.decrypt::<Cbc>(&ciphertext, &wrong_aad),
+        "CTR" => aead.decrypt::<Ctr>(&ciphertext, &wrong_aad),
+        "CFB" => aead.decrypt::<Cfb>(&ciphertext, &wrong_aad),
+        "OFB" => aead.decrypt::<Ofb>(&ciphertext, &wrong_aad),
+        "ECB" => aead.decrypt::<Ecb>(&ciphertext, &wrong_aad),
+        _ => return Err(anyhow::anyhow!("Unknown base mode: {}", base_mode)),
+    };
+
     assert!(wrong_result.is_err(), "ETM should fail with wrong AAD for {} with base mode {}", description, base_mode);
     assert!(wrong_result.unwrap_err().to_string().contains("Authentication failed"));
 
@@ -89,7 +102,15 @@ fn test_etm_case(description: &str, base_mode: &str, plaintext: &[u8], aad_hex: 
     if tampered_ciphertext.len() > 50 {
         tampered_ciphertext[30] ^= 0x01;
 
-        let tampered_result = aead.decrypt(&*base_crypto, &tampered_ciphertext, &aad);
+        let tampered_result = match base_mode {
+            "CBC" => aead.decrypt::<Cbc>(&tampered_ciphertext, &aad),
+            "CTR" => aead.decrypt::<Ctr>(&tampered_ciphertext, &aad),
+            "CFB" => aead.decrypt::<Cfb>(&tampered_ciphertext, &aad),
+            "OFB" => aead.decrypt::<Ofb>(&tampered_ciphertext, &aad),
+            "ECB" => aead.decrypt::<Ecb>(&tampered_ciphertext, &aad),
+            _ => return Err(anyhow::anyhow!("Unknown base mode: {}", base_mode)),
+        };
+
         assert!(tampered_result.is_err(), "ETM should fail with tampered ciphertext for {} with base mode {}", description, base_mode);
     }
 
@@ -113,26 +134,6 @@ fn test_gcm_integration() -> Result<()> {
     }
 
     println!("\nAll GCM integration tests passed!");
-    Ok(())
-}
-
-#[test]
-fn test_etm_integration() -> Result<()> {
-    println!("=== ETM Integration Test ===");
-
-    let test_cases: Vec<(&str, &str, Vec<u8>, &str)> = vec![
-        ("Short message", "CBC", b"Hello ETM!".to_vec(), "aabbcc"),
-        ("Empty plaintext", "CTR", b"".to_vec(), "deadbeef"),
-        ("Message with AAD", "CFB", b"Secret message".to_vec(), "00112233"),
-        ("With ECB base", "ECB", b"ECB based ETM".to_vec(), "44556677"),
-        ("With OFB base", "OFB", b"OFB based ETM".to_vec(), "8899aabb"),
-    ];
-
-    for (description, base_mode, plaintext, aad_hex) in test_cases {
-        test_etm_case(description, base_mode, &plaintext, aad_hex)?;
-    }
-
-    println!("\nAll ETM integration tests passed!");
     Ok(())
 }
 
@@ -164,12 +165,11 @@ fn test_aead_catastrophic_failure() -> Result<()> {
     println!("Testing ETM catastrophic failure...");
     {
         let aead = EncryptThenMac::new(key)?;
-        let cbc = Cbc::new(key)?;
         let iv = [0x00; 16];
 
-        let ciphertext = aead.encrypt(&cbc, plaintext, &iv, &correct_aad)?;
+        let ciphertext = aead.encrypt::<Cbc>(plaintext, &iv, &correct_aad)?;
 
-        let result = aead.decrypt(&cbc, &ciphertext, &wrong_aad);
+        let result = aead.decrypt::<Cbc>(&ciphertext, &wrong_aad);
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -222,18 +222,17 @@ fn test_aead_file_operations() -> Result<()> {
     println!("Testing ETM file operations...");
     {
         let aead = EncryptThenMac::new(key)?;
-        let cbc = Cbc::new(key)?;
         let iv = [0x00; 16];
         let aad = hex::decode(aad_hex)?;
 
         let file_data = fs::read(test_path)?;
 
-        let encrypted = aead.encrypt(&cbc, &file_data, &iv, &aad)?;
+        let encrypted = aead.encrypt::<Cbc>(&file_data, &iv, &aad)?;
 
         let mut encrypted_file = NamedTempFile::new()?;
         encrypted_file.write_all(&encrypted)?;
 
-        let decrypted = aead.decrypt(&cbc, &encrypted, &aad)?;
+        let decrypted = aead.decrypt::<Cbc>(&encrypted, &aad)?;
 
         assert_eq!(file_data, decrypted, "ETM file decryption failed");
         println!("  ETM file operations passed");

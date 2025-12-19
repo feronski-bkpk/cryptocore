@@ -1,5 +1,6 @@
 use openssl::symm::{Cipher, Crypter, Mode};
 use anyhow::{Result, anyhow};
+use hex;
 
 const BLOCK_SIZE: usize = 16;
 
@@ -10,6 +11,28 @@ pub struct Ofb {
 impl Ofb {
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
+        Ok(Self { key })
+    }
+
+    pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
+        if key.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key_array = [0u8; BLOCK_SIZE];
+        key_array.copy_from_slice(key);
+
+        Ok(Self { key: key_array })
+    }
+
+    pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
+        if key_bytes.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key = [0u8; BLOCK_SIZE];
+        key.copy_from_slice(key_bytes);
+
         Ok(Self { key })
     }
 
@@ -36,11 +59,11 @@ impl super::BlockMode for Ofb {
 
         for chunk in plaintext.chunks(BLOCK_SIZE) {
             let keystream = self.generate_keystream_block(&feedback)?;
-            
+
             for (i, &byte) in chunk.iter().enumerate() {
                 ciphertext.push(byte ^ keystream[i]);
             }
-            
+
             feedback = keystream;
         }
 
@@ -81,6 +104,28 @@ mod tests {
         let decrypted = ofb.decrypt(&ciphertext, &iv).unwrap();
 
         assert_eq!(plaintext, &decrypted[..]);
+    }
+
+    #[test]
+    fn test_ofb_from_bytes() {
+        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let iv = vec![0x00; 16];
+        let plaintext = b"Test OFB from bytes";
+
+        let ofb_from_bytes = Ofb::new_from_bytes(&key_bytes).unwrap();
+        let ofb_from_hex = Ofb::new("00112233445566778899aabbccddeeff").unwrap();
+
+        let ciphertext1 = ofb_from_bytes.encrypt(plaintext, &iv).unwrap();
+        let ciphertext2 = ofb_from_hex.encrypt(plaintext, &iv).unwrap();
+
+        assert_eq!(ciphertext1, ciphertext2);
+
+        let decrypted1 = ofb_from_bytes.decrypt(&ciphertext1, &iv).unwrap();
+        let decrypted2 = ofb_from_hex.decrypt(&ciphertext2, &iv).unwrap();
+
+        assert_eq!(decrypted1, plaintext);
+        assert_eq!(decrypted2, plaintext);
     }
 
     #[test]

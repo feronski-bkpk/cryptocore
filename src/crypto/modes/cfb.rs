@@ -1,5 +1,6 @@
 use openssl::symm::{Cipher, Crypter, Mode};
 use anyhow::{Result, anyhow};
+use hex;
 
 const BLOCK_SIZE: usize = 16;
 
@@ -10,6 +11,28 @@ pub struct Cfb {
 impl Cfb {
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
+        Ok(Self { key })
+    }
+
+    pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
+        if key.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key_array = [0u8; BLOCK_SIZE];
+        key_array.copy_from_slice(key);
+
+        Ok(Self { key: key_array })
+    }
+
+    pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
+        if key_bytes.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key = [0u8; BLOCK_SIZE];
+        key.copy_from_slice(key_bytes);
+
         Ok(Self { key })
     }
 
@@ -36,13 +59,13 @@ impl super::BlockMode for Cfb {
 
         for chunk in plaintext.chunks(BLOCK_SIZE) {
             let keystream = self.encrypt_keystream(&feedback)?;
-            
+
             let mut encrypted_chunk = Vec::with_capacity(chunk.len());
             for (i, &byte) in chunk.iter().enumerate() {
                 encrypted_chunk.push(byte ^ keystream[i]);
             }
             ciphertext.extend_from_slice(&encrypted_chunk);
-            
+
             if encrypted_chunk.len() == BLOCK_SIZE {
                 feedback = encrypted_chunk;
             } else {
@@ -66,17 +89,16 @@ impl super::BlockMode for Cfb {
 
         for chunk in ciphertext.chunks(BLOCK_SIZE) {
             let keystream = self.encrypt_keystream(&feedback)?;
-            
+
             let mut decrypted_chunk = Vec::with_capacity(chunk.len());
             for (i, &byte) in chunk.iter().enumerate() {
                 decrypted_chunk.push(byte ^ keystream[i]);
             }
             plaintext.extend_from_slice(&decrypted_chunk);
-            
+
             if chunk.len() == BLOCK_SIZE {
                 feedback = chunk.to_vec();
             } else {
-                // For partial final block
                 feedback = keystream[..BLOCK_SIZE].to_vec();
                 for (i, &byte) in chunk.iter().enumerate() {
                     feedback[i] = byte;
@@ -117,6 +139,28 @@ mod tests {
         let decrypted = cfb.decrypt(&ciphertext, &iv).unwrap();
 
         assert_eq!(plaintext, &decrypted[..]);
+    }
+
+    #[test]
+    fn test_cfb_from_bytes() {
+        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let iv = vec![0x00; 16];
+        let plaintext = b"Test CFB from bytes";
+
+        let cfb_from_bytes = Cfb::new_from_bytes(&key_bytes).unwrap();
+        let cfb_from_hex = Cfb::new("00112233445566778899aabbccddeeff").unwrap();
+
+        let ciphertext1 = cfb_from_bytes.encrypt(plaintext, &iv).unwrap();
+        let ciphertext2 = cfb_from_hex.encrypt(plaintext, &iv).unwrap();
+
+        assert_eq!(ciphertext1, ciphertext2);
+
+        let decrypted1 = cfb_from_bytes.decrypt(&ciphertext1, &iv).unwrap();
+        let decrypted2 = cfb_from_hex.decrypt(&ciphertext2, &iv).unwrap();
+
+        assert_eq!(decrypted1, plaintext);
+        assert_eq!(decrypted2, plaintext);
     }
 
     #[test]

@@ -13,7 +13,17 @@ impl HMAC {
     pub fn new(key: &[u8], hash_function: HashType) -> Self {
         let block_size = 64;
 
-        let processed_key = Self::process_key(key, hash_function, block_size);
+        let mut processed_key = if key.len() > block_size {
+            let hasher = hash_function.create_hasher();
+            let hash_result = hasher.hash_data(key).unwrap_or_default();
+            hex::decode(&hash_result).unwrap_or_else(|_| key[..block_size].to_vec())
+        } else {
+            key.to_vec()
+        };
+
+        if processed_key.len() < block_size {
+            processed_key.resize(block_size, 0);
+        }
 
         Self {
             key: processed_key,
@@ -22,28 +32,29 @@ impl HMAC {
         }
     }
 
-    fn process_key(key: &[u8], hash_function: HashType, block_size: usize) -> Vec<u8> {
-        if key.len() > block_size {
-            let hasher = hash_function.create_hasher();
-            if let Ok(hash_result) = hasher.hash_data(key) {
-                if let Ok(hash_bytes) = hex::decode(&hash_result) {
-                    return hash_bytes;
-                }
-            }
-            return key[..block_size].to_vec();
-        }
-
-        if key.len() < block_size {
-            let mut padded_key = key.to_vec();
-            padded_key.extend(vec![0u8; block_size - key.len()]);
-            return padded_key;
-        }
-
-        key.to_vec()
-    }
-
     fn xor_bytes(a: &[u8], b: &[u8]) -> Vec<u8> {
         a.iter().zip(b.iter()).map(|(x, y)| x ^ y).collect()
+    }
+
+    pub fn compute_bytes(&self, message: &[u8]) -> Result<Vec<u8>> {
+        let ipad = vec![0x36; self.block_size];
+        let opad = vec![0x5c; self.block_size];
+
+        let k_ipad = HMAC::xor_bytes(&self.key, &ipad);
+        let k_opad = HMAC::xor_bytes(&self.key, &opad);
+
+        let mut inner_data = k_ipad;
+        inner_data.extend_from_slice(message);
+
+        let hasher = self.hash_function.create_hasher();
+        let inner_hash = hasher.hash_data(&inner_data)?;
+        let inner_hash_bytes = hex::decode(&inner_hash)?;
+
+        let mut outer_data = k_opad;
+        outer_data.extend_from_slice(&inner_hash_bytes);
+
+        let outer_hash = hasher.hash_data(&outer_data)?;
+        Ok(hex::decode(&outer_hash)?)
     }
 
     #[allow(dead_code)]
@@ -51,29 +62,29 @@ impl HMAC {
         let ipad = vec![0x36; self.block_size];
         let opad = vec![0x5c; self.block_size];
 
-        let k_ipad = Self::xor_bytes(&self.key, &ipad);
-        let k_opad = Self::xor_bytes(&self.key, &opad);
+        let k_ipad = HMAC::xor_bytes(&self.key, &ipad);
+        let k_opad = HMAC::xor_bytes(&self.key, &opad);
 
         let mut inner_data = k_ipad;
         inner_data.extend_from_slice(message);
 
         let hasher = self.hash_function.create_hasher();
         let inner_hash = hasher.hash_data(&inner_data)?;
-
         let inner_hash_bytes = hex::decode(&inner_hash)?;
+
         let mut outer_data = k_opad;
         outer_data.extend_from_slice(&inner_hash_bytes);
 
-        let outer_hash = hasher.hash_data(&outer_data)?;
-        Ok(outer_hash)
+        hasher.hash_data(&outer_data)
     }
+
     #[allow(dead_code)]
     pub fn compute_file(&self, file_path: &Path) -> Result<String> {
         let ipad = vec![0x36; self.block_size];
         let opad = vec![0x5c; self.block_size];
 
-        let k_ipad = Self::xor_bytes(&self.key, &ipad);
-        let k_opad = Self::xor_bytes(&self.key, &opad);
+        let k_ipad = HMAC::xor_bytes(&self.key, &ipad);
+        let k_opad = HMAC::xor_bytes(&self.key, &opad);
 
         let inner_hash = self.hash_file_with_prefix(file_path, &k_ipad)?;
         let inner_hash_bytes = hex::decode(&inner_hash)?;
@@ -85,6 +96,7 @@ impl HMAC {
 
         Ok(outer_hash)
     }
+
     #[allow(dead_code)]
     fn hash_file_with_prefix(&self, file_path: &Path, prefix: &[u8]) -> Result<String> {
         if file_path.to_str() == Some("-") {

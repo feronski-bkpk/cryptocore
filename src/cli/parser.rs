@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum, Args};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
@@ -18,9 +18,63 @@ pub enum Mode {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
+pub enum KdfAlgorithm {
+    Pbkdf2,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 pub enum Operation {
     Encrypt,
     Decrypt,
+}
+
+#[derive(Args, Debug)]
+pub struct DeriveArgs {
+    #[arg(
+        long,
+        help = "Password string",
+        long_help = "Password for key derivation. If containing special characters, quote properly in shell."
+    )]
+    pub password: String,
+
+    #[arg(
+        long,
+        help = "Salt as hexadecimal string (optional)",
+        long_help = "Salt for key derivation as hexadecimal string. If not provided, a random 16-byte salt will be generated."
+    )]
+    pub salt: Option<String>,
+
+    #[arg(
+        long,
+        help = "Iteration count",
+        long_help = "Number of iterations for key derivation function.",
+        default_value_t = 100000
+    )]
+    pub iterations: u32,
+
+    #[arg(
+        long,
+        help = "Key length in bytes",
+        long_help = "Desired length of derived key in bytes.",
+        default_value_t = 32
+    )]
+    pub length: usize,
+
+    #[arg(
+        long,
+        value_enum,
+        help = "KDF algorithm",
+        long_help = "Key derivation function algorithm.",
+        default_value = "pbkdf2"
+    )]
+    pub algorithm: KdfAlgorithm,
+
+    #[arg(
+        long,
+        help = "Output file path (optional)",
+        long_help = "Path where derived key will be written. If not provided, output goes to stdout."
+    )]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -150,21 +204,27 @@ pub enum Command {
         )]
         verify: Option<PathBuf>,
     },
+
+    /// Derive cryptographic keys from passwords
+    Derive {
+        #[command(flatten)]
+        args: DeriveArgs,
+    },
 }
 
 #[derive(Parser, Debug)]
 #[command(
     name = "cryptocore",
-    version = "0.6.0",
-    about = "CryptoCore - Encryption/decryption, hashing and HMAC tool with AEAD support",
+    version = "0.7.0",
+    about = "CryptoCore - Encryption/decryption, hashing, HMAC and key derivation tool",
     long_about = r#"
-CryptoCore: A command-line tool for AES-128 encryption/decryption, hash computation, HMAC and authenticated encryption.
+CryptoCore: A command-line tool for AES-128 encryption/decryption, hash computation, HMAC, authenticated encryption and key derivation.
 
 Encryption/Decryption:
-  Supported modes: ECB, CBC, CFB, OFB, CTR, GCM, ETM (NEW)
+  Supported modes: ECB, CBC, CFB, OFB, CTR, GCM, ETM
   For encryption, --key is optional (random key will be generated)
 
-Authenticated Encryption (NEW in v0.6.0):
+Authenticated Encryption:
   GCM mode with AAD support (--aad flag)
   ETM (Encrypt-then-MAC) mode combining any block mode with HMAC-SHA256
     Use --base-mode to specify underlying encryption mode (default: cbc)
@@ -177,7 +237,14 @@ HMAC:
   HMAC-SHA256 support with --hmac and --key flags
   Verification support with --verify flag
 
+Key Derivation (NEW in v0.7.0):
+  PBKDF2-HMAC-SHA256 for deriving keys from passwords
+  Key hierarchy function for deriving multiple keys from master key
+
 Examples:
+  Key Derivation with PBKDF2:
+    cryptocore derive --password "MySecurePassword" --salt a1b2c3d4 --iterations 100000 --length 32
+
   GCM Encryption with AAD:
     cryptocore crypto --algorithm aes --mode gcm --operation encrypt --key KEY --input plain.txt --output cipher.bin --aad AABBCC
 
@@ -187,9 +254,6 @@ Examples:
   ETM Encryption with CBC as base mode:
     cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt --key KEY --input plain.txt --output cipher.bin --aad AABBCC
 
-  ETM Decryption:
-    cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt --key KEY --input cipher.bin --output decrypted.txt --aad AABBCC
-
   Encryption with automatic key generation:
     cryptocore crypto --algorithm aes --mode cbc --operation encrypt --input plain.txt --output cipher.bin
 
@@ -198,9 +262,6 @@ Examples:
 
   Compute HMAC-SHA256:
     cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input message.txt
-
-  Verify HMAC:
-    cryptocore dgst --algorithm sha256 --hmac --key 00112233445566778899aabbccddeeff --input message.txt --verify expected_hmac.txt
 "#
 )]
 pub struct Cli {
@@ -353,11 +414,31 @@ impl Cli {
                     }
                 }
             }
+            Command::Derive { args } => {
+                if args.password.is_empty() {
+                    return Err("Password cannot be empty".to_string());
+                }
+
+                if args.length == 0 {
+                    return Err("Key length must be greater than 0".to_string());
+                }
+
+                if args.iterations == 0 {
+                    return Err("Iteration count must be greater than 0".to_string());
+                }
+
+                if let Some(salt) = &args.salt {
+                    if salt.is_empty() {
+                        return Err("Salt cannot be empty".to_string());
+                    }
+                }
+            }
         }
 
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_output_path(&self) -> Option<PathBuf> {
         match &self.command {
             Command::Crypto { input, output, operation, .. } => {
@@ -371,6 +452,9 @@ impl Cli {
             }
             Command::Dgst { output, .. } => {
                 output.clone()
+            }
+            Command::Derive { args } => {
+                args.output.clone()
             }
         }
     }

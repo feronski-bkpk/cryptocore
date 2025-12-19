@@ -1,5 +1,6 @@
 use openssl::symm::{Cipher, Crypter, Mode};
 use anyhow::{Result, anyhow};
+use hex;
 
 const BLOCK_SIZE: usize = 16;
 
@@ -10,6 +11,28 @@ pub struct Ecb {
 impl Ecb {
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
+        Ok(Self { key })
+    }
+
+    pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
+        if key.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key_array = [0u8; BLOCK_SIZE];
+        key_array.copy_from_slice(key);
+
+        Ok(Self { key: key_array })
+    }
+
+    pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
+        if key_bytes.len() != BLOCK_SIZE {
+            return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
+        }
+
+        let mut key = [0u8; BLOCK_SIZE];
+        key.copy_from_slice(key_bytes);
+
         Ok(Self { key })
     }
 
@@ -33,7 +56,7 @@ impl Ecb {
         if padding_len == 0 || padding_len > BLOCK_SIZE {
             return Err(anyhow!("Invalid padding"));
         }
-        
+
         for i in (data.len() - padding_len)..data.len() {
             if data[i] != padding_byte {
                 return Err(anyhow!("Invalid padding"));
@@ -106,6 +129,27 @@ mod tests {
         let decrypted = ecb.decrypt(&ciphertext, &[]).unwrap();
 
         assert_eq!(plaintext, &decrypted[..]);
+    }
+
+    #[test]
+    fn test_ecb_from_bytes() {
+        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let plaintext = b"Test ECB from bytes";
+
+        let ecb_from_bytes = Ecb::new_from_bytes(&key_bytes).unwrap();
+        let ecb_from_hex = Ecb::new("00112233445566778899aabbccddeeff").unwrap();
+
+        let ciphertext1 = ecb_from_bytes.encrypt(plaintext, &[]).unwrap();
+        let ciphertext2 = ecb_from_hex.encrypt(plaintext, &[]).unwrap();
+
+        assert_eq!(ciphertext1, ciphertext2);
+
+        let decrypted1 = ecb_from_bytes.decrypt(&ciphertext1, &[]).unwrap();
+        let decrypted2 = ecb_from_hex.decrypt(&ciphertext2, &[]).unwrap();
+
+        assert_eq!(decrypted1, plaintext);
+        assert_eq!(decrypted2, plaintext);
     }
 
     #[test]
