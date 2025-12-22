@@ -135,12 +135,12 @@ diff test.txt o2c_decrypted.txt
 
 ### 4.4 HMAC создание
 ```bash
-./cryptocore dgst --algorithm sha256 --hmac --key secret123 --input test.txt --output test.hmac
+./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --output test.hmac
 ```
 
 ### 4.5 HMAC проверка (успешная)
 ```bash
-./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac && echo "✓ HMAC проверка успешна"
+./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac
 ```
 
 ### 4.6 HMAC проверка (неудачная)
@@ -148,7 +148,7 @@ diff test.txt o2c_decrypted.txt
 echo "tamper" >> test.txt
 ```
 ```
-./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac 2>/dev/null || echo "✓ HMAC обнаружил изменение"
+./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac 2>/dev/null
 ```
 
 ### 4.7 Восстановление файла
@@ -167,30 +167,12 @@ head -n -1 test.txt > test_temp.txt && mv test_temp.txt test.txt
 ./cryptocore derive --password "MyPassword" --salt 1234567890abcdef --iterations 10000 --length 32
 ```
 
-### 5.2 Использование выведенного ключа для шифрования
-```bash
-# Выводим ключ и берем первую часть (hex ключ)
-KEY=$(./cryptocore derive --password "MyPassword" --salt 1234567890abcdef --iterations 10000 --length 32 2>&1 | grep -E '^[0-9a-f]{64}$' | head -1)
-echo "Выведенный ключ: $KEY"
-```
-```
-# Шифруем выведенным ключом
-./cryptocore crypto --algorithm aes --mode cbc --operation encrypt --key $KEY --input test.txt --output test_pbkdf2.enc
-```
-```
-# Дешифруем тем же ключом
-./cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --input test_pbkdf2.enc --output test_pbkdf2.dec
-```
-```
-diff test.txt test_pbkdf2.dec
-```
-
-### 5.3 Выведение с авто-солью
+### 5.2 Выведение с авто-солью
 ```bash
 ./cryptocore derive --password "AnotherPassword" --iterations 50000 --length 16
 ```
 
-### 5.4 Выведение ключа в файл
+### 5.3 Выведение ключа в файл
 ```bash
 SALT_HEX=$(echo -n "fixedappsalt123456" | xxd -p)
 ./cryptocore derive --password "app_password" --salt $SALT_HEX --iterations 10000 --length 32 --output derived.key
