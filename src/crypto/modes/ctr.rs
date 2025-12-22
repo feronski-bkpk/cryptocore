@@ -1,19 +1,68 @@
-use openssl::symm::{Cipher, Crypter, Mode};
-use anyhow::{Result, anyhow};
-use hex;
+//! Counter (CTR) mode implementation.
+//!
+//! CTR mode turns a block cipher into a stream cipher by encrypting
+//! successive values of a counter.
+//!
+//! # Characteristics
+//!
+//! - Stream cipher mode (no padding required)
+//! - Highly parallelizable (encryption and decryption)
+//! - Random access to ciphertext blocks
+//! - Requires unique counter values (never reuse IV with same key)
+//!
+//! # Security Note
+//!
+//! CTR provides confidentiality but **not authentication**.
+//! Counter values must never repeat with the same key.
 
+use anyhow::{anyhow, Result};
+use hex;
+use openssl::symm::{Cipher, Crypter, Mode};
+
+/// Block size in bytes for AES operations.
 const BLOCK_SIZE: usize = 16;
 
+/// Counter (CTR) mode implementation.
+#[derive(Debug, Clone)]
 pub struct Ctr {
+    /// AES-128 encryption key.
     key: [u8; BLOCK_SIZE],
 }
 
 impl Ctr {
+    /// Creates a new CTR instance from a hexadecimal key string.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_hex` - 32-character hexadecimal string (16 bytes)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ctr)` - New CTR instance
+    /// * `Err(anyhow::Error)` - If key format is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::modes::Ctr;
+    ///
+    /// let ctr = Ctr::new("00112233445566778899aabbccddeeff").unwrap();
+    /// ```
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
         Ok(Self { key })
     }
 
+    /// Creates a new CTR instance from raw key bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - 16-byte AES key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ctr)` - New CTR instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
         if key.len() != BLOCK_SIZE {
@@ -26,6 +75,16 @@ impl Ctr {
         Ok(Self { key: key_array })
     }
 
+    /// Creates a new CTR instance from a byte slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_bytes` - Byte slice containing the key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ctr)` - New CTR instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
         if key_bytes.len() != BLOCK_SIZE {
@@ -38,6 +97,15 @@ impl Ctr {
         Ok(Self { key })
     }
 
+    /// Encrypts a counter value to produce keystream.
+    ///
+    /// # Arguments
+    ///
+    /// * `counter` - Counter value to encrypt
+    ///
+    /// # Returns
+    ///
+    /// Generated keystream block
     fn encrypt_counter(&self, counter: &[u8]) -> Result<Vec<u8>> {
         let cipher = Cipher::aes_128_ecb();
         let mut crypter = Crypter::new(cipher, Mode::Encrypt, &self.key, None)?;
@@ -49,6 +117,11 @@ impl Ctr {
         Ok(output)
     }
 
+    /// Increments a counter value by 1 (big-endian).
+    ///
+    /// # Arguments
+    ///
+    /// * `counter` - Counter to increment (modified in place)
     fn increment_counter(counter: &mut [u8]) {
         for byte in counter.iter_mut().rev() {
             if *byte == 0xff {
@@ -84,10 +157,21 @@ impl super::BlockMode for Ctr {
     }
 
     fn decrypt(&self, ciphertext: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
+        // CTR decryption is identical to encryption
         self.encrypt(ciphertext, iv)
     }
 }
 
+/// Parses a hexadecimal string into a fixed-size key array.
+///
+/// # Arguments
+///
+/// * `key_hex` - Hexadecimal string, optionally prefixed with '@'
+///
+/// # Returns
+///
+/// * `Ok([u8; BLOCK_SIZE])` - Parsed key
+/// * `Err(anyhow::Error)` - If string has invalid length or format
 fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     let key_str = key_hex.trim_start_matches('@');
     if key_str.len() != BLOCK_SIZE * 2 {
@@ -106,6 +190,7 @@ mod tests {
     use super::*;
     use crate::crypto::BlockMode;
 
+    /// Tests CTR encryption and decryption round trip.
     #[test]
     fn test_ctr_round_trip() {
         let key = "00112233445566778899aabbccddeeff";
@@ -119,10 +204,13 @@ mod tests {
         assert_eq!(plaintext, &decrypted[..]);
     }
 
+    /// Tests creating CTR from both bytes and hex produces same results.
     #[test]
     fn test_ctr_from_bytes() {
-        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let key_bytes = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
         let iv = vec![0x00; 16];
         let plaintext = b"Test CTR from bytes";
 
@@ -141,10 +229,13 @@ mod tests {
         assert_eq!(decrypted2, plaintext);
     }
 
+    /// Tests counter increment logic.
     #[test]
     fn test_counter_increment() {
-        let mut counter = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut counter = vec![
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
 
         Ctr::increment_counter(&mut counter);
         assert_eq!(counter[15], 0x01);
@@ -155,17 +246,14 @@ mod tests {
         assert_eq!(counter[15], 0x00);
     }
 
+    /// Tests CTR with partial blocks (not multiples of 16 bytes).
     #[test]
     fn test_ctr_partial_blocks() {
         let key = "00112233445566778899aabbccddeeff";
         let iv = vec![0x01; 16];
         let ctr = Ctr::new(key).unwrap();
 
-        let test_data = [
-            vec![0x41; 15],
-            vec![0x42; 17],
-            vec![0x43; 31],
-        ];
+        let test_data = [vec![0x41; 15], vec![0x42; 17], vec![0x43; 31]];
 
         for data in test_data {
             let ciphertext = ctr.encrypt(&data, &iv).unwrap();

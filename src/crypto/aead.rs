@@ -1,18 +1,91 @@
-use anyhow::{Result, anyhow};
-use crate::crypto::modes::{BlockMode, FromKeyBytes};
-use crate::mac::hmac::HMAC;
-use crate::hash::HashType;
+//! Authenticated Encryption with Associated Data (AEAD) implementation.
+//!
+//! This module provides the Encrypt-then-MAC (ETM) construction, which
+//! combines any block cipher mode with HMAC-SHA256 for authenticated encryption.
+//!
+//! # Security Properties
+//!
+//! - Provides both confidentiality and integrity/authentication
+//! - Uses separate keys for encryption and MAC (via key derivation)
+//! - Supports additional authenticated data (AAD)
+//! - Implements the standard Encrypt-then-MAC composition
+//!
+//! # Usage
+//!
+//! ```
+//! use cryptocore::crypto::aead::EncryptThenMac;
+//! use cryptocore::crypto::modes::Cbc;
+//!
+//! let key = "00112233445566778899aabbccddeeff";
+//! let aead = EncryptThenMac::new(key).unwrap();
+//!
+//! let iv = [0u8; 16];
+//! let plaintext = b"Hello, world!";
+//! let aad = b"metadata";
+//!
+//! // Encryption
+//! let ciphertext = aead.encrypt::<Cbc>(plaintext, &iv, aad).unwrap();
+//!
+//! // Decryption
+//! let decrypted = aead.decrypt::<Cbc>(&ciphertext, aad).unwrap();
+//! assert_eq!(plaintext, &decrypted[..]);
+//! ```
+
+use anyhow::{anyhow, Result};
 use hex;
 
+use crate::crypto::modes::{BlockMode, FromKeyBytes};
+use crate::hash::HashType;
+use crate::mac::hmac::HMAC;
+
+/// Block size in bytes for AES operations.
 const BLOCK_SIZE: usize = 16;
+
+/// Tag size in bytes for HMAC-SHA256.
 const TAG_SIZE: usize = 32;
 
+/// Encrypt-then-MAC authenticated encryption scheme.
+///
+/// This struct implements the Encrypt-then-MAC composition:
+/// 1. Encrypt plaintext using a block cipher mode
+/// 2. Compute HMAC over ciphertext and AAD
+/// 3. Output: IV || ciphertext || tag
+///
+/// # Key Derivation
+///
+/// From a single master key, two keys are derived:
+/// - Encryption key: HMAC(master_key, "encryption" || 0x01)
+/// - MAC key: HMAC(master_key, "authentication" || 0x01)
+#[derive(Debug, Clone)]
 pub struct EncryptThenMac {
+    /// Key used for encryption operations.
     encryption_key: [u8; BLOCK_SIZE],
+    /// Key used for MAC computation.
     mac_key: [u8; BLOCK_SIZE],
 }
 
 impl EncryptThenMac {
+    /// Creates a new EncryptThenMac instance from a hexadecimal key string.
+    ///
+    /// The key string must be 32 hexadecimal characters (16 bytes).
+    /// It can optionally be prefixed with '@'.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_hex` - Master key in hexadecimal format
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(EncryptThenMac)` - Successfully created instance
+    /// * `Err(anyhow::Error)` - If key format is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::aead::EncryptThenMac;
+    ///
+    /// let aead = EncryptThenMac::new("00112233445566778899aabbccddeeff").unwrap();
+    /// ```
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
 
@@ -24,10 +97,26 @@ impl EncryptThenMac {
         })
     }
 
-    fn derive_keys(master_key: &[u8; BLOCK_SIZE]) -> Result<([u8; BLOCK_SIZE], [u8; BLOCK_SIZE])> {
+    /// Derives encryption and MAC keys from a master key.
+    ///
+    /// Uses HMAC-SHA256 with domain separation:
+    /// - Encryption key: HMAC(master_key, "encryption" || 0x01)
+    /// - MAC key: HMAC(master_key, "authentication" || 0x01)
+    ///
+    /// # Arguments
+    ///
+    /// * `master_key` - 16-byte master key
+    ///
+    /// # Returns
+    ///
+    /// Tuple of (encryption_key, mac_key) as 16-byte arrays
+    fn derive_keys(
+        master_key: &[u8; BLOCK_SIZE],
+    ) -> Result<([u8; BLOCK_SIZE], [u8; BLOCK_SIZE])> {
         let mut encryption_key = [0u8; BLOCK_SIZE];
         let mut mac_key = [0u8; BLOCK_SIZE];
 
+        // Derive encryption key
         let mut encryption_input = b"encryption".to_vec();
         encryption_input.push(0x01);
 
@@ -43,6 +132,7 @@ impl EncryptThenMac {
             encryption_key.copy_from_slice(&padded[..BLOCK_SIZE]);
         }
 
+        // Derive MAC key
         let mut mac_input = b"authentication".to_vec();
         mac_input.push(0x01);
 
@@ -61,38 +151,104 @@ impl EncryptThenMac {
         Ok((encryption_key, mac_key))
     }
 
+    /// Returns a reference to the encryption key.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the 16-byte encryption key
     #[allow(dead_code)]
     pub fn get_encryption_key(&self) -> &[u8; BLOCK_SIZE] {
         &self.encryption_key
     }
 
+    /// Returns a reference to the MAC key.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the 16-byte MAC key
     #[allow(dead_code)]
     pub fn get_mac_key(&self) -> &[u8; BLOCK_SIZE] {
         &self.mac_key
     }
 
+    /// Encrypts plaintext using the specified block cipher mode.
+    ///
+    /// Format: IV || ciphertext || HMAC(ciphertext || AAD)
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M` - Block cipher mode implementing `BlockMode` and `FromKeyBytes`
+    ///
+    /// # Arguments
+    ///
+    /// * `plaintext` - Data to encrypt
+    /// * `iv` - Initialization vector (must match mode requirements)
+    /// * `aad` - Additional authenticated data
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<u8>)` - Encrypted data with authentication tag
+    /// * `Err(anyhow::Error)` - If encryption fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::aead::EncryptThenMac;
+    /// use cryptocore::crypto::modes::Cbc;
+    ///
+    /// let aead = EncryptThenMac::new("00112233445566778899aabbccddeeff").unwrap();
+    /// let iv = [0u8; 16];
+    /// let ciphertext = aead.encrypt::<Cbc>(b"Hello", &iv, b"").unwrap();
+    /// ```
     pub fn encrypt<M: BlockMode + FromKeyBytes>(
         &self,
         plaintext: &[u8],
         iv: &[u8],
-        aad: &[u8]
+        aad: &[u8],
     ) -> Result<Vec<u8>> {
         self.encrypt_with_mode::<M>(plaintext, iv, aad)
     }
 
-    pub fn decrypt<M: BlockMode + FromKeyBytes>(
-        &self,
-        data: &[u8],
-        aad: &[u8]
-    ) -> Result<Vec<u8>> {
+    /// Decrypts and verifies data encrypted with `encrypt`.
+    ///
+    /// Verifies the HMAC tag before attempting decryption.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M` - Block cipher mode implementing `BlockMode` and `FromKeyBytes`
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Encrypted data (IV || ciphertext || tag)
+    /// * `aad` - Additional authenticated data (must match encryption AAD)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<u8>)` - Decrypted plaintext
+    /// * `Err(anyhow::Error)` - If authentication fails or decryption fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::aead::EncryptThenMac;
+    /// use cryptocore::crypto::modes::Cbc;
+    ///
+    /// let aead = EncryptThenMac::new("00112233445566778899aabbccddeeff").unwrap();
+    /// let iv = [0u8; 16];
+    /// let ciphertext = aead.encrypt::<Cbc>(b"Hello", &iv, b"").unwrap();
+    /// let plaintext = aead.decrypt::<Cbc>(&ciphertext, b"").unwrap();
+    /// assert_eq!(plaintext, b"Hello");
+    /// ```
+    pub fn decrypt<M: BlockMode + FromKeyBytes>(&self, data: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         self.decrypt_with_mode::<M>(data, aad)
     }
 
+    /// Internal implementation of encryption with a specific mode.
     fn encrypt_with_mode<M: BlockMode + FromKeyBytes>(
         &self,
         plaintext: &[u8],
         iv: &[u8],
-        aad: &[u8]
+        aad: &[u8],
     ) -> Result<Vec<u8>> {
         let mode = M::from_key_bytes(&self.encryption_key)?;
         let ciphertext = mode.encrypt(plaintext, iv)?;
@@ -113,10 +269,11 @@ impl EncryptThenMac {
         Ok(result)
     }
 
+    /// Internal implementation of decryption with a specific mode.
     fn decrypt_with_mode<M: BlockMode + FromKeyBytes>(
         &self,
         data: &[u8],
-        aad: &[u8]
+        aad: &[u8],
     ) -> Result<Vec<u8>> {
         if data.len() < BLOCK_SIZE + TAG_SIZE {
             return Err(anyhow!("Data too short for Encrypt-then-MAC format"));
@@ -146,6 +303,16 @@ impl EncryptThenMac {
     }
 }
 
+/// Parses a hexadecimal string into a fixed-size key array.
+///
+/// # Arguments
+///
+/// * `key_hex` - Hexadecimal string, optionally prefixed with '@'
+///
+/// # Returns
+///
+/// * `Ok([u8; BLOCK_SIZE])` - Parsed key
+/// * `Err(anyhow::Error)` - If string has invalid length or format
 fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     let key_str = key_hex.trim_start_matches('@');
     if key_str.len() != BLOCK_SIZE * 2 {
@@ -159,12 +326,14 @@ fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     Ok(key)
 }
 
+#[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use super::*;
     #[allow(unused_imports)]
     use crate::crypto::modes::Cbc;
 
+    /// Tests basic Encrypt-then-MAC functionality.
     #[test]
     fn test_encrypt_then_mac_basic() -> Result<()> {
         let key = "00112233445566778899aabbccddeeff";
@@ -181,6 +350,7 @@ mod tests {
         Ok(())
     }
 
+    /// Tests that encryption and MAC keys are properly separated.
     #[test]
     fn test_key_separation() -> Result<()> {
         let key = "00112233445566778899aabbccddeeff";
@@ -195,6 +365,7 @@ mod tests {
         Ok(())
     }
 
+    /// Tests that key derivation is deterministic.
     #[test]
     fn test_deterministic_key_derivation() -> Result<()> {
         let key = "0123456789abcdef0123456789abcdef";
@@ -208,6 +379,7 @@ mod tests {
         Ok(())
     }
 
+    /// Tests validation of key length.
     #[test]
     fn test_invalid_key_length() -> Result<()> {
         let short_key = "00112233445566778899aabbccddee";

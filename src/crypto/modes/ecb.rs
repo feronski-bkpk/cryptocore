@@ -1,19 +1,71 @@
-use openssl::symm::{Cipher, Crypter, Mode};
-use anyhow::{Result, anyhow};
-use hex;
+//! Electronic Codebook (ECB) mode implementation.
+//!
+//! ECB mode encrypts each block independently using the same key.
+//!
+//! # Security Warning
+//!
+//! **ECB mode is not secure for most applications** because identical
+//! plaintext blocks produce identical ciphertext blocks, revealing
+//! patterns in the data. It should only be used for:
+//! - Encrypting a single block of data
+//! - Educational purposes
+//! - Building other modes (like CBC, CFB, etc.)
+//!
+//! # Recommendation
+//!
+//! Use CBC, CTR, or GCM modes instead of ECB for real-world applications.
 
+use anyhow::{anyhow, Result};
+use hex;
+use openssl::symm::{Cipher, Crypter, Mode};
+
+/// Block size in bytes for AES operations.
 const BLOCK_SIZE: usize = 16;
 
+/// Electronic Codebook (ECB) mode implementation.
+///
+/// ⚠️ **Warning**: ECB mode is not secure for encrypting multiple blocks.
+/// Identical plaintext blocks produce identical ciphertext blocks.
+#[derive(Debug, Clone)]
 pub struct Ecb {
+    /// AES-128 encryption key.
     key: [u8; BLOCK_SIZE],
 }
 
 impl Ecb {
+    /// Creates a new ECB instance from a hexadecimal key string.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_hex` - 32-character hexadecimal string (16 bytes)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ecb)` - New ECB instance
+    /// * `Err(anyhow::Error)` - If key format is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::modes::Ecb;
+    ///
+    /// let ecb = Ecb::new("00112233445566778899aabbccddeeff").unwrap();
+    /// ```
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
         Ok(Self { key })
     }
 
+    /// Creates a new ECB instance from raw key bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - 16-byte AES key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ecb)` - New ECB instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
         if key.len() != BLOCK_SIZE {
@@ -26,6 +78,16 @@ impl Ecb {
         Ok(Self { key: key_array })
     }
 
+    /// Creates a new ECB instance from a byte slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_bytes` - Byte slice containing the key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ecb)` - New ECB instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
         if key_bytes.len() != BLOCK_SIZE {
@@ -38,6 +100,15 @@ impl Ecb {
         Ok(Self { key })
     }
 
+    /// Applies PKCS#7 padding to the data.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data to pad
+    ///
+    /// # Returns
+    ///
+    /// Padded data (length is multiple of BLOCK_SIZE)
     fn pkcs7_pad(&self, data: &[u8]) -> Vec<u8> {
         let padding_len = BLOCK_SIZE - (data.len() % BLOCK_SIZE);
         let padding_byte = padding_len as u8;
@@ -47,6 +118,16 @@ impl Ecb {
         padded
     }
 
+    /// Removes PKCS#7 padding from the data.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data to unpad
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<u8>)` - Unpadded data
+    /// * `Err(anyhow::Error)` - If padding is invalid
     fn pkcs7_unpad(&self, data: &[u8]) -> Result<Vec<u8>> {
         if data.is_empty() {
             return Ok(data.to_vec());
@@ -59,6 +140,7 @@ impl Ecb {
             return Err(anyhow!("Invalid padding"));
         }
 
+        // Verify all padding bytes are correct
         for i in (data.len() - padding_len)..data.len() {
             if data[i] != padding_byte {
                 return Err(anyhow!("Invalid padding"));
@@ -86,7 +168,9 @@ impl super::BlockMode for Ecb {
 
     fn decrypt(&self, ciphertext: &[u8], _iv: &[u8]) -> Result<Vec<u8>> {
         if ciphertext.len() % BLOCK_SIZE != 0 {
-            return Err(anyhow!("Ciphertext length must be multiple of block size"));
+            return Err(anyhow!(
+                "Ciphertext length must be multiple of block size"
+            ));
         }
 
         let cipher = Cipher::aes_128_ecb();
@@ -103,6 +187,16 @@ impl super::BlockMode for Ecb {
     }
 }
 
+/// Parses a hexadecimal string into a fixed-size key array.
+///
+/// # Arguments
+///
+/// * `key_hex` - Hexadecimal string, optionally prefixed with '@'
+///
+/// # Returns
+///
+/// * `Ok([u8; BLOCK_SIZE])` - Parsed key
+/// * `Err(anyhow::Error)` - If string has invalid length or format
 fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     let key_str = key_hex.trim_start_matches('@');
     if key_str.len() != BLOCK_SIZE * 2 {
@@ -121,6 +215,7 @@ mod tests {
     use super::*;
     use crate::crypto::BlockMode;
 
+    /// Tests ECB encryption and decryption round trip.
     #[test]
     fn test_ecb_round_trip() {
         let key = "00112233445566778899aabbccddeeff";
@@ -133,10 +228,13 @@ mod tests {
         assert_eq!(plaintext, &decrypted[..]);
     }
 
+    /// Tests creating ECB from both bytes and hex produces same results.
     #[test]
     fn test_ecb_from_bytes() {
-        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let key_bytes = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
         let plaintext = b"Test ECB from bytes";
 
         let ecb_from_bytes = Ecb::new_from_bytes(&key_bytes).unwrap();
@@ -154,6 +252,7 @@ mod tests {
         assert_eq!(decrypted2, plaintext);
     }
 
+    /// Tests ECB padding with various data sizes.
     #[test]
     fn test_ecb_padding() {
         let key = "00112233445566778899aabbccddeeff";
@@ -164,8 +263,8 @@ mod tests {
             b"A".to_vec(),
             b"AB".to_vec(),
             b"ABC".to_vec(),
-            b"ABCDEFGHIJKLMNOP".to_vec(),
-            b"ABCDEFGHIJKLMNOPQ".to_vec(),
+            b"ABCDEFGHIJKLMNOP".to_vec(), // Exactly one block
+            b"ABCDEFGHIJKLMNOPQ".to_vec(), // One block plus one byte
         ];
 
         for original in test_cases {
@@ -175,6 +274,7 @@ mod tests {
         }
     }
 
+    /// Demonstrates ECB's deterministic property (security weakness).
     #[test]
     fn test_ecb_deterministic() {
         let key = "00112233445566778899aabbccddeeff";
@@ -184,6 +284,8 @@ mod tests {
         let ciphertext1 = ecb.encrypt(plaintext, &[]).unwrap();
         let ciphertext2 = ecb.encrypt(plaintext, &[]).unwrap();
 
+        // This demonstrates ECB's security weakness:
+        // identical plaintexts produce identical ciphertexts
         assert_eq!(ciphertext1, ciphertext2);
     }
 }

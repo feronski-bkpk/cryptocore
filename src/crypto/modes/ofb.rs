@@ -1,19 +1,68 @@
-use openssl::symm::{Cipher, Crypter, Mode};
-use anyhow::{Result, anyhow};
-use hex;
+//! Output Feedback (OFB) mode implementation.
+//!
+//! OFB mode turns a block cipher into a synchronous stream cipher.
+//! It generates a keystream independent of the plaintext/ciphertext.
+//!
+//! # Characteristics
+//!
+//! - Stream cipher mode (no padding required)
+//! - Keystream generation is independent of data
+//! - Errors propagate indefinitely (not self-synchronizing)
+//! - Requires unique IV for each encryption with the same key
+//!
+//! # Security Note
+//!
+//! OFB provides confidentiality but **not authentication**.
+//! The same keystream cannot be reused with different plaintexts.
 
+use anyhow::{anyhow, Result};
+use hex;
+use openssl::symm::{Cipher, Crypter, Mode};
+
+/// Block size in bytes for AES operations.
 const BLOCK_SIZE: usize = 16;
 
+/// Output Feedback (OFB) mode implementation.
+#[derive(Debug, Clone)]
 pub struct Ofb {
+    /// AES-128 encryption key.
     key: [u8; BLOCK_SIZE],
 }
 
 impl Ofb {
+    /// Creates a new OFB instance from a hexadecimal key string.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_hex` - 32-character hexadecimal string (16 bytes)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ofb)` - New OFB instance
+    /// * `Err(anyhow::Error)` - If key format is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::modes::Ofb;
+    ///
+    /// let ofb = Ofb::new("00112233445566778899aabbccddeeff").unwrap();
+    /// ```
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
         Ok(Self { key })
     }
 
+    /// Creates a new OFB instance from raw key bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - 16-byte AES key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ofb)` - New OFB instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
         if key.len() != BLOCK_SIZE {
@@ -26,6 +75,16 @@ impl Ofb {
         Ok(Self { key: key_array })
     }
 
+    /// Creates a new OFB instance from a byte slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_bytes` - Byte slice containing the key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Ofb)` - New OFB instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
         if key_bytes.len() != BLOCK_SIZE {
@@ -38,6 +97,15 @@ impl Ofb {
         Ok(Self { key })
     }
 
+    /// Generates a keystream block by encrypting the feedback register.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Current feedback register value
+    ///
+    /// # Returns
+    ///
+    /// Generated keystream block
     fn generate_keystream_block(&self, input: &[u8]) -> Result<Vec<u8>> {
         let cipher = Cipher::aes_128_ecb();
         let mut crypter = Crypter::new(cipher, Mode::Encrypt, &self.key, None)?;
@@ -66,6 +134,7 @@ impl super::BlockMode for Ofb {
                 ciphertext.push(byte ^ keystream[i]);
             }
 
+            // Update feedback with keystream (not ciphertext)
             feedback = keystream;
         }
 
@@ -73,10 +142,21 @@ impl super::BlockMode for Ofb {
     }
 
     fn decrypt(&self, ciphertext: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
+        // OFB decryption is identical to encryption
         self.encrypt(ciphertext, iv)
     }
 }
 
+/// Parses a hexadecimal string into a fixed-size key array.
+///
+/// # Arguments
+///
+/// * `key_hex` - Hexadecimal string, optionally prefixed with '@'
+///
+/// # Returns
+///
+/// * `Ok([u8; BLOCK_SIZE])` - Parsed key
+/// * `Err(anyhow::Error)` - If string has invalid length or format
 fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     let key_str = key_hex.trim_start_matches('@');
     if key_str.len() != BLOCK_SIZE * 2 {
@@ -95,6 +175,7 @@ mod tests {
     use super::*;
     use crate::crypto::BlockMode;
 
+    /// Tests OFB encryption and decryption round trip.
     #[test]
     fn test_ofb_round_trip() {
         let key = "00112233445566778899aabbccddeeff";
@@ -108,10 +189,13 @@ mod tests {
         assert_eq!(plaintext, &decrypted[..]);
     }
 
+    /// Tests creating OFB from both bytes and hex produces same results.
     #[test]
     fn test_ofb_from_bytes() {
-        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let key_bytes = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
         let iv = vec![0x00; 16];
         let plaintext = b"Test OFB from bytes";
 
@@ -130,6 +214,7 @@ mod tests {
         assert_eq!(decrypted2, plaintext);
     }
 
+    /// Tests OFB with various data sizes.
     #[test]
     fn test_ofb_different_sizes() {
         let key = "00112233445566778899aabbccddeeff";

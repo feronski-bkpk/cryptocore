@@ -1,19 +1,68 @@
-use openssl::symm::{Cipher, Crypter, Mode};
-use anyhow::{Result, anyhow};
-use hex;
+//! Cipher Feedback (CFB) mode implementation.
+//!
+//! CFB mode turns a block cipher into a self-synchronizing stream cipher.
+//! It encrypts plaintext by XORing with the output of the block cipher.
+//!
+//! # Characteristics
+//!
+//! - Stream cipher mode (no padding required)
+//! - Self-synchronizing after ciphertext errors
+//! - Encryption and decryption use the same keystream generation
+//! - Requires unique IV for each encryption with the same key
+//!
+//! # Security Note
+//!
+//! CFB provides confidentiality but **not authentication**.
+//! Use authenticated modes like GCM when integrity protection is needed.
 
+use anyhow::{anyhow, Result};
+use hex;
+use openssl::symm::{Cipher, Crypter, Mode};
+
+/// Block size in bytes for AES operations.
 const BLOCK_SIZE: usize = 16;
 
+/// Cipher Feedback (CFB) mode implementation.
+#[derive(Debug, Clone)]
 pub struct Cfb {
+    /// AES-128 encryption key.
     key: [u8; BLOCK_SIZE],
 }
 
 impl Cfb {
+    /// Creates a new CFB instance from a hexadecimal key string.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_hex` - 32-character hexadecimal string (16 bytes)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Cfb)` - New CFB instance
+    /// * `Err(anyhow::Error)` - If key format is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::modes::Cfb;
+    ///
+    /// let cfb = Cfb::new("00112233445566778899aabbccddeeff").unwrap();
+    /// ```
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
         Ok(Self { key })
     }
 
+    /// Creates a new CFB instance from raw key bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - 16-byte AES key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Cfb)` - New CFB instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
         if key.len() != BLOCK_SIZE {
@@ -26,6 +75,16 @@ impl Cfb {
         Ok(Self { key: key_array })
     }
 
+    /// Creates a new CFB instance from a byte slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_bytes` - Byte slice containing the key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Cfb)` - New CFB instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
         if key_bytes.len() != BLOCK_SIZE {
@@ -38,6 +97,15 @@ impl Cfb {
         Ok(Self { key })
     }
 
+    /// Generates keystream by encrypting the feedback register.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Current feedback register value
+    ///
+    /// # Returns
+    ///
+    /// Generated keystream block
     fn encrypt_keystream(&self, input: &[u8]) -> Result<Vec<u8>> {
         let cipher = Cipher::aes_128_ecb();
         let mut crypter = Crypter::new(cipher, Mode::Encrypt, &self.key, None)?;
@@ -68,9 +136,11 @@ impl super::BlockMode for Cfb {
             }
             ciphertext.extend_from_slice(&encrypted_chunk);
 
+            // Update feedback register
             if encrypted_chunk.len() == BLOCK_SIZE {
                 feedback = encrypted_chunk;
             } else {
+                // For partial blocks, use keystream as base
                 feedback = keystream[..BLOCK_SIZE].to_vec();
                 for (i, &byte) in encrypted_chunk.iter().enumerate() {
                     feedback[i] = byte;
@@ -98,9 +168,11 @@ impl super::BlockMode for Cfb {
             }
             plaintext.extend_from_slice(&decrypted_chunk);
 
+            // Update feedback register
             if chunk.len() == BLOCK_SIZE {
                 feedback = chunk.to_vec();
             } else {
+                // For partial blocks, use keystream as base
                 feedback = keystream[..BLOCK_SIZE].to_vec();
                 for (i, &byte) in chunk.iter().enumerate() {
                     feedback[i] = byte;
@@ -112,6 +184,16 @@ impl super::BlockMode for Cfb {
     }
 }
 
+/// Parses a hexadecimal string into a fixed-size key array.
+///
+/// # Arguments
+///
+/// * `key_hex` - Hexadecimal string, optionally prefixed with '@'
+///
+/// # Returns
+///
+/// * `Ok([u8; BLOCK_SIZE])` - Parsed key
+/// * `Err(anyhow::Error)` - If string has invalid length or format
 fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     let key_str = key_hex.trim_start_matches('@');
     if key_str.len() != BLOCK_SIZE * 2 {
@@ -130,6 +212,7 @@ mod tests {
     use super::*;
     use crate::crypto::BlockMode;
 
+    /// Tests CFB encryption and decryption round trip.
     #[test]
     fn test_cfb_round_trip() {
         let key = "00112233445566778899aabbccddeeff";
@@ -143,10 +226,13 @@ mod tests {
         assert_eq!(plaintext, &decrypted[..]);
     }
 
+    /// Tests creating CFB from both bytes and hex produces same results.
     #[test]
     fn test_cfb_from_bytes() {
-        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let key_bytes = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
         let iv = vec![0x00; 16];
         let plaintext = b"Test CFB from bytes";
 
@@ -165,6 +251,7 @@ mod tests {
         assert_eq!(decrypted2, plaintext);
     }
 
+    /// Tests CFB with various data sizes.
     #[test]
     fn test_cfb_different_sizes() {
         let key = "00112233445566778899aabbccddeeff";

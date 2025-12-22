@@ -1,19 +1,68 @@
-use openssl::symm::{Cipher, Crypter, Mode};
-use anyhow::{Result, anyhow};
-use hex;
+//! Cipher Block Chaining (CBC) mode implementation.
+//!
+//! CBC mode provides diffusion by XORing each plaintext block
+//! with the previous ciphertext block before encryption.
+//!
+//! # Security Properties
+//!
+//! - Provides diffusion (each ciphertext block depends on all previous blocks)
+//! - Requires proper padding (PKCS#7 implemented)
+//! - Not parallelizable for encryption (but parallelizable for decryption)
+//! - Requires unique IV for each encryption with the same key
+//!
+//! # Warning
+//!
+//! CBC mode provides confidentiality but **not authentication**.
+//! Use authenticated modes like GCM or ETM when integrity protection is needed.
 
+use anyhow::{anyhow, Result};
+use hex;
+use openssl::symm::{Cipher, Crypter, Mode};
+
+/// Block size in bytes for AES operations.
 const BLOCK_SIZE: usize = 16;
 
+/// Cipher Block Chaining (CBC) mode implementation.
+#[derive(Debug, Clone)]
 pub struct Cbc {
+    /// AES-128 encryption key.
     key: [u8; BLOCK_SIZE],
 }
 
 impl Cbc {
+    /// Creates a new CBC instance from a hexadecimal key string.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_hex` - 32-character hexadecimal string (16 bytes)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Cbc)` - New CBC instance
+    /// * `Err(anyhow::Error)` - If key format is invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cryptocore::crypto::modes::Cbc;
+    ///
+    /// let cbc = Cbc::new("00112233445566778899aabbccddeeff").unwrap();
+    /// ```
     pub fn new(key_hex: &str) -> Result<Self> {
         let key = parse_hex_key(key_hex)?;
         Ok(Self { key })
     }
 
+    /// Creates a new CBC instance from raw key bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - 16-byte AES key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Cbc)` - New CBC instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
         if key.len() != BLOCK_SIZE {
@@ -26,6 +75,16 @@ impl Cbc {
         Ok(Self { key: key_array })
     }
 
+    /// Creates a new CBC instance from a byte slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_bytes` - Byte slice containing the key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Cbc)` - New CBC instance
+    /// * `Err(anyhow::Error)` - If key length is invalid
     #[allow(dead_code)]
     pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
         if key_bytes.len() != BLOCK_SIZE {
@@ -38,6 +97,16 @@ impl Cbc {
         Ok(Self { key })
     }
 
+    /// Encrypts a single block using ECB mode (internal CBC operation).
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - Plaintext block to encrypt
+    /// * `iv` - Initialization vector for this block
+    ///
+    /// # Returns
+    ///
+    /// Encrypted block
     fn encrypt_block(&self, block: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
         let cipher = Cipher::aes_128_ecb();
         let mut crypter = Crypter::new(cipher, Mode::Encrypt, &self.key, None)?;
@@ -45,6 +114,7 @@ impl Cbc {
 
         let mut output = vec![0; BLOCK_SIZE * 2];
 
+        // XOR with IV (or previous ciphertext block)
         let mut xored = vec![0; BLOCK_SIZE];
         for i in 0..BLOCK_SIZE {
             xored[i] = block[i] ^ iv[i];
@@ -55,6 +125,16 @@ impl Cbc {
         Ok(output)
     }
 
+    /// Decrypts a single block using ECB mode (internal CBC operation).
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - Ciphertext block to decrypt
+    /// * `iv` - Initialization vector (or previous ciphertext block)
+    ///
+    /// # Returns
+    ///
+    /// Decrypted block
     fn decrypt_block(&self, block: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
         let cipher = Cipher::aes_128_ecb();
         let mut crypter = Crypter::new(cipher, Mode::Decrypt, &self.key, None)?;
@@ -64,6 +144,7 @@ impl Cbc {
         let count = crypter.update(block, &mut output)?;
         output.truncate(count);
 
+        // XOR with IV (or previous ciphertext block)
         for i in 0..BLOCK_SIZE {
             output[i] ^= iv[i];
         }
@@ -97,7 +178,9 @@ impl super::BlockMode for Cbc {
         }
 
         if ciphertext.len() % BLOCK_SIZE != 0 {
-            return Err(anyhow!("Ciphertext length must be multiple of block size"));
+            return Err(anyhow!(
+                "Ciphertext length must be multiple of block size"
+            ));
         }
 
         let mut plaintext = Vec::new();
@@ -114,6 +197,16 @@ impl super::BlockMode for Cbc {
     }
 }
 
+/// Applies PKCS#7 padding to the data.
+///
+/// # Arguments
+///
+/// * `data` - Data to pad
+/// * `block_size` - Block size for padding
+///
+/// # Returns
+///
+/// Padded data
 fn pkcs7_pad(data: &[u8], block_size: usize) -> Vec<u8> {
     let padding_len = block_size - (data.len() % block_size);
     let padding_byte = padding_len as u8;
@@ -123,6 +216,17 @@ fn pkcs7_pad(data: &[u8], block_size: usize) -> Vec<u8> {
     padded
 }
 
+/// Removes PKCS#7 padding from the data.
+///
+/// # Arguments
+///
+/// * `data` - Data to unpad
+/// * `block_size` - Block size used for padding
+///
+/// # Returns
+///
+/// * `Ok(Vec<u8>)` - Unpadded data
+/// * `Err(anyhow::Error)` - If padding is invalid
 fn pkcs7_unpad(data: &[u8], block_size: usize) -> Result<Vec<u8>> {
     if data.is_empty() {
         return Ok(data.to_vec());
@@ -135,6 +239,7 @@ fn pkcs7_unpad(data: &[u8], block_size: usize) -> Result<Vec<u8>> {
         return Err(anyhow!("Invalid padding"));
     }
 
+    // Verify all padding bytes are correct
     for i in (data.len() - padding_len)..data.len() {
         if data[i] != padding_byte {
             return Err(anyhow!("Invalid padding"));
@@ -144,6 +249,16 @@ fn pkcs7_unpad(data: &[u8], block_size: usize) -> Result<Vec<u8>> {
     Ok(data[..data.len() - padding_len].to_vec())
 }
 
+/// Parses a hexadecimal string into a fixed-size key array.
+///
+/// # Arguments
+///
+/// * `key_hex` - Hexadecimal string, optionally prefixed with '@'
+///
+/// # Returns
+///
+/// * `Ok([u8; BLOCK_SIZE])` - Parsed key
+/// * `Err(anyhow::Error)` - If string has invalid length or format
 fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
     let key_str = key_hex.trim_start_matches('@');
     if key_str.len() != BLOCK_SIZE * 2 {
@@ -162,6 +277,7 @@ mod tests {
     use super::*;
     use crate::crypto::BlockMode;
 
+    /// Tests CBC encryption and decryption round trip.
     #[test]
     fn test_cbc_round_trip() {
         let key = "00112233445566778899aabbccddeeff";
@@ -175,10 +291,13 @@ mod tests {
         assert_eq!(plaintext, &decrypted[..]);
     }
 
+    /// Tests creating CBC from both bytes and hex produces same results.
     #[test]
     fn test_cbc_from_bytes() {
-        let key_bytes = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let key_bytes = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
         let iv = vec![0x00; 16];
         let plaintext = b"Test from bytes";
 
@@ -197,6 +316,7 @@ mod tests {
         assert_eq!(decrypted2, plaintext);
     }
 
+    /// Tests PKCS#7 padding and unpadding.
     #[test]
     fn test_pkcs7_pad_unpad() {
         let data = b"test";
@@ -207,6 +327,7 @@ mod tests {
         assert_eq!(data, &unpadded[..]);
     }
 
+    /// Tests CBC with various data sizes.
     #[test]
     fn test_cbc_different_sizes() {
         let key = "00112233445566778899aabbccddeeff";
@@ -228,6 +349,7 @@ mod tests {
         }
     }
 
+    /// Tests validation of key length.
     #[test]
     fn test_invalid_key_length() {
         let short_key = vec![0x00; 15];
