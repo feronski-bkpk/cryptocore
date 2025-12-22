@@ -3,25 +3,30 @@ use crate::mac::hmac::HMAC;
 use crate::hash::HashType;
 use hex;
 
+#[allow(dead_code)]
 pub fn derive_key(master_key: &[u8], context: &str, length: usize) -> Result<Vec<u8>> {
-    let context_bytes = context.as_bytes();
+    let salt = &[];
+    let hmac_extract = HMAC::new(salt, HashType::Sha256);
+    let prk_hex = hmac_extract.compute(master_key)?;
+    let prk = hex::decode(&prk_hex)?;
 
-    let mut derived = Vec::with_capacity(length);
-    let mut counter: u32 = 1;
+    let mut okm = Vec::with_capacity(length);
+    let mut t = Vec::new();
+    let mut counter: u8 = 1;
 
-    while derived.len() < length {
-        let mut input = context_bytes.to_vec();
-        input.extend_from_slice(&counter.to_be_bytes());
+    while okm.len() < length {
+        let mut input = t.clone();
+        input.extend_from_slice(context.as_bytes());
+        input.push(counter);
 
-        let hmac = HMAC::new(master_key, HashType::Sha256);
-        let block_hex = hmac.compute(&input)?;
-        let block = hex::decode(&block_hex)?;
+        let hmac_expand = HMAC::new(&prk, HashType::Sha256);
+        t = hex::decode(hmac_expand.compute(&input)?)?;
 
-        derived.extend_from_slice(&block);
+        okm.extend_from_slice(&t);
         counter += 1;
     }
 
-    Ok(derived[..length].to_vec())
+    Ok(okm[..length].to_vec())
 }
 
 #[cfg(test)]

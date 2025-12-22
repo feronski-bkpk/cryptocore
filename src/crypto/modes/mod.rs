@@ -62,6 +62,7 @@ impl FromKeyBytes for Gcm {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn create_mode_from_bytes<M: FromKeyBytes>(key: &[u8; 16]) -> Result<M> {
     M::from_key_bytes(key)
 }

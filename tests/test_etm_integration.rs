@@ -1,5 +1,6 @@
 use anyhow::Result;
 use cryptocore::crypto::aead::EncryptThenMac;
+#[allow(unused_imports)]
 use cryptocore::crypto::{Cbc, Ctr, Cfb, Ofb, Ecb};
 use std::io::Write;
 use tempfile::NamedTempFile;

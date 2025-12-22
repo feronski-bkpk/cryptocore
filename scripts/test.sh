@@ -188,26 +188,37 @@ write_step "Testing SHA-256 with known vectors"
 echo -n "abc" > "$TEST_FILES_DIR/sha256_test.txt"
 
 if sha256_output=$("$CRYPTOCORE_EXE" dgst --algorithm sha256 --input "$TEST_FILES_DIR/sha256_test.txt" 2>&1); then
-    if [[ "$sha256_output" == *"1c28dc3f1f804a1ad9c9b4b4cf5e2658d16ad4ed08e3020d04a8d2865018947c"* ]]; then
+    # Извлекаем только хеш (первое слово из вывода)
+    sha256_hash=$(echo "$sha256_output" | awk '{print $1}')
+    if [[ "$sha256_hash" == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" ]]; then
         add_test_result "PASSED: SHA-256 known vector correct" "Hash"
     else
         add_test_result "FAILED: SHA-256 known vector mismatch" "Hash"
+        echo "Debug: Expected: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" >&2
+        echo "Debug: Got:      $sha256_hash" >&2
     fi
 else
-    add_test_result "FAILED: SHA-256 test error" "Hash"
+    exit_code=$?
+    add_test_result "FAILED: SHA-256 test error (exit code: $exit_code)" "Hash"
+    echo "Debug: Output was: '$sha256_output'" >&2
 fi
 
 write_step "Testing SHA3-256 with known vectors"
 echo -n "abc" > "$TEST_FILES_DIR/sha3_test.txt"
 
 if sha3_output=$("$CRYPTOCORE_EXE" dgst --algorithm sha3-256 --input "$TEST_FILES_DIR/sha3_test.txt" 2>&1); then
-    if [[ "$sha3_output" == *"d6fc903061d8ea170c2e12d8ebc29737c5edf8fe60e11801cebd674b719166b1"* ]]; then
+    sha3_hash=$(echo "$sha3_output" | awk '{print $1}')
+    if [[ "$sha3_hash" == "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532" ]]; then
         add_test_result "PASSED: SHA3-256 known vector correct" "Hash"
     else
         add_test_result "FAILED: SHA3-256 known vector mismatch" "Hash"
+        echo "Debug: Expected: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532" >&2
+        echo "Debug: Got:      $sha3_hash" >&2
     fi
 else
-    add_test_result "FAILED: SHA3-256 test error" "Hash"
+    exit_code=$?
+    add_test_result "FAILED: SHA3-256 test error (exit code: $exit_code)" "Hash"
+    echo "Debug: Output was: '$sha3_output'" >&2
 fi
 
 # Step 6: HMAC Tests
@@ -217,26 +228,36 @@ write_step "Testing HMAC basic functionality"
 echo -n "Hi There" > "$TEST_FILES_DIR/hmac_test1.txt"
 
 if hmac_output1=$("$CRYPTOCORE_EXE" dgst --algorithm sha256 --hmac --key "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b" --input "$TEST_FILES_DIR/hmac_test1.txt" 2>&1); then
-    if [[ "$hmac_output1" == *"74c69388287ca06248e6be230daffe807d4c6fc0e45da0325f2fae0d1a4ee3b8"* ]]; then
+    hmac_hash1=$(echo "$hmac_output1" | awk '{print $1}')
+    if [[ "$hmac_hash1" == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" ]]; then
         add_test_result "PASSED: HMAC Test Case 1 correct" "HMAC"
     else
         add_test_result "FAILED: HMAC Test Case 1 mismatch" "HMAC"
+        echo "Debug: Expected: b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" >&2
+        echo "Debug: Got:      $hmac_hash1" >&2
     fi
 else
-    add_test_result "FAILED: HMAC test error" "HMAC"
+    exit_code=$?
+    add_test_result "FAILED: HMAC test error (exit code: $exit_code)" "HMAC"
+    echo "Debug: Output was: '$hmac_output1'" >&2
 fi
 
 write_step "Testing HMAC with different key"
 echo -n "what do ya want for nothing?" > "$TEST_FILES_DIR/hmac_test2.txt"
 
 if hmac_output2=$("$CRYPTOCORE_EXE" dgst --algorithm sha256 --hmac --key "4a656665" --input "$TEST_FILES_DIR/hmac_test2.txt" 2>&1); then
-    if [[ "$hmac_output2" == *"bbda9901e08476911958eb7d35b1afef014a1576bf8b2c6f85cc9514aed1d967"* ]]; then
+    hmac_hash2=$(echo "$hmac_output2" | awk '{print $1}')
+    if [[ "$hmac_hash2" == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" ]]; then
         add_test_result "PASSED: HMAC Test Case 2 correct" "HMAC"
     else
         add_test_result "FAILED: HMAC Test Case 2 mismatch" "HMAC"
+        echo "Debug: Expected: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" >&2
+        echo "Debug: Got:      $hmac_hash2" >&2
     fi
 else
-    add_test_result "FAILED: HMAC test error" "HMAC"
+    exit_code=$?
+    add_test_result "FAILED: HMAC test error (exit code: $exit_code)" "HMAC"
+    echo "Debug: Output was: '$hmac_output2'" >&2
 fi
 
 # Step 7: Key Derivation Function (KDF) Tests

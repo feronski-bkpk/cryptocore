@@ -16,6 +16,7 @@ impl Gcm {
         Ok(Self { key })
     }
 
+    #[allow(dead_code)]
     pub fn new_from_bytes(key: &[u8; BLOCK_SIZE]) -> Result<Self> {
         if key.len() != BLOCK_SIZE {
             return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));
@@ -27,6 +28,7 @@ impl Gcm {
         Ok(Self { key: key_array })
     }
 
+    #[allow(dead_code)]
     pub fn new_from_key_bytes(key_bytes: &[u8]) -> Result<Self> {
         if key_bytes.len() != BLOCK_SIZE {
             return Err(anyhow!("Key must be {} bytes", BLOCK_SIZE));

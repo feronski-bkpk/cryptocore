@@ -39,6 +39,7 @@ pub fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, dklen: 
     Ok(derived_key[..dklen].to_vec())
 }
 
+#[allow(dead_code)]
 fn f(password: &[u8], salt: &[u8], c: u32, i: u32) -> Result<Vec<u8>> {
     let mut salt_with_index = salt.to_vec();
     salt_with_index.extend_from_slice(&i.to_be_bytes());

@@ -61,11 +61,12 @@ impl EncryptThenMac {
         Ok((encryption_key, mac_key))
     }
 
+    #[allow(dead_code)]
     pub fn get_encryption_key(&self) -> &[u8; BLOCK_SIZE] {
         &self.encryption_key
     }
 
-
+    #[allow(dead_code)]
     pub fn get_mac_key(&self) -> &[u8; BLOCK_SIZE] {
         &self.mac_key
     }
@@ -159,7 +160,9 @@ fn parse_hex_key(key_hex: &str) -> Result<[u8; BLOCK_SIZE]> {
 }
 
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
+    #[allow(unused_imports)]
     use crate::crypto::modes::Cbc;
 
     #[test]

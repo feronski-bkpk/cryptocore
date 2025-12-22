@@ -43,6 +43,7 @@ fn test_gcm_case(description: &str, plaintext: &[u8], aad_hex: &str) -> Result<(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn test_etm_case(description: &str, base_mode: &str, plaintext: &[u8], aad_hex: &str) -> Result<()> {
     println!("\nTesting ETM with {} base mode: {}", base_mode, description);
 

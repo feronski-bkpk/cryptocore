@@ -26,12 +26,14 @@ impl Csprng {
         Ok(salt)
     }
 
+    #[allow(dead_code)]
     pub fn generate_nonce(size: usize) -> Result<Vec<u8>> {
         let mut nonce = vec![0u8; size];
         rand::rand_bytes(&mut nonce)?;
         Ok(nonce)
     }
 
+    #[allow(dead_code)]
     pub fn generate_random_bytes(size: usize) -> Result<Vec<u8>> {
         if size == 0 {
             return Ok(Vec::new());
@@ -42,10 +44,12 @@ impl Csprng {
         Ok(bytes)
     }
 
+    #[allow(dead_code)]
     pub fn generate_large_random_data(size: usize) -> Result<Vec<u8>> {
         Self::generate_random_bytes(size)
     }
 
+    #[allow(dead_code)]
     pub fn test_randomness() -> Result<()> {
         let mut key_set = std::collections::HashSet::new();
         let mut iv_set = std::collections::HashSet::new();
