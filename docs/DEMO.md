@@ -21,7 +21,7 @@ echo "This is only for testing" > test.txt
 ./cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX --input test_cbc.enc --output test_cbc.dec
 ```
 ```
-diff test.txt test_cbc.dec && echo "CBC работает"
+diff test.txt test_cbc.dec
 ```
 
 ### 2.2 ECB режим
@@ -32,7 +32,7 @@ diff test.txt test_cbc.dec && echo "CBC работает"
 ./cryptocore crypto --algorithm aes --mode ecb --operation decrypt --key 00112233445566778899aabbccddeeff --input test_ecb.enc --output test_ecb.dec
 ```
 ```
-diff test.txt test_ecb.dec && echo "ECB работает"
+diff test.txt test_ecb.dec
 ```
 
 ### 2.3 CFB режим
@@ -43,7 +43,7 @@ diff test.txt test_ecb.dec && echo "ECB работает"
 ./cryptocore crypto --algorithm aes --mode cfb --operation decrypt --key 00112233445566778899aabbccddeeff --input test_cfb.enc --output test_cfb.dec
 ```
 ```
-diff test.txt test_cfb.dec && echo "CFB работает"
+diff test.txt test_cfb.dec
 ```
 
 ### 2.4 OFB режим
@@ -54,7 +54,7 @@ diff test.txt test_cfb.dec && echo "CFB работает"
 ./cryptocore crypto --algorithm aes --mode ofb --operation decrypt --key 00112233445566778899aabbccddeeff --input test_ofb.enc --output test_ofb.dec
 ```
 ```
-diff test.txt test_ofb.dec && echo "OFB работает"
+diff test.txt test_ofb.dec
 ```
 
 ### 2.5 CTR режим
@@ -65,7 +65,7 @@ diff test.txt test_ofb.dec && echo "OFB работает"
 ./cryptocore crypto --algorithm aes --mode ctr --operation decrypt --key 00112233445566778899aabbccddeeff --input test_ctr.enc --output test_ctr.dec
 ```
 ```
-diff test.txt test_ctr.dec && echo "CTR работает"
+diff test.txt test_ctr.dec
 ```
 
 ### 2.6 GCM режим (с аутентификацией)
@@ -76,18 +76,18 @@ diff test.txt test_ctr.dec && echo "CTR работает"
 ./cryptocore crypto --algorithm aes --mode gcm --operation decrypt --key 00112233445566778899aabbccddeeff --input test_gcm.enc --output test_gcm.dec
 ```
 ```
-diff test.txt test_gcm.dec && echo "GCM работает"
+diff test.txt test_gcm.dec
 ```
 
 ### 2.7 ETM режим (Encrypt-then-MAC)
 ```bash
-./cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input test.txt --output test_etm.enc --aad context
+./cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation encrypt --key 00112233445566778899aabbccddeeff --input test.txt --output test_etm.enc --aad 636f6e74657874
 ```
 ```
-./cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input test_etm.enc --output test_etm.dec --aad context
+./cryptocore crypto --algorithm aes --mode etm --base-mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --input test_etm.enc --output test_etm.dec --aad 636f6e74657874
 ```
 ```
-diff test.txt test_etm.dec && echo "ETM работает"
+diff test.txt test_etm.dec
 ```
 
 ## 3. ИНТЕРОПЕРАБЕЛЬНОСТЬ
@@ -102,7 +102,7 @@ dd if=interop_c2o.enc of=c2o_cipher.bin bs=16 skip=1 2>/dev/null
 ```
 ```
 openssl enc -aes-128-cbc -d -K 00112233445566778899aabbccddeeff -iv $(xxd -p c2o_iv.bin | tr -d '\n') -in c2o_cipher.bin -out c2o_decrypted.txt
-diff test.txt c2o_decrypted.txt && echo "CryptoCore--OpenSSL CBC работает"
+diff test.txt c2o_decrypted.txt
 ```
 
 ### 3.2 OpenSSL -- CryptoCore (CBC)
@@ -113,7 +113,7 @@ openssl enc -aes-128-cbc -K 00112233445566778899aabbccddeeff -iv 000102030405060
 ./cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key 00112233445566778899aabbccddeeff --iv 000102030405060708090a0b0c0d0e0f --input openssl_encrypted.bin --output o2c_decrypted.txt
 ```
 ```
-diff test.txt o2c_decrypted.txt && echo "OpenSSL--CryptoCore CBC работает"
+diff test.txt o2c_decrypted.txt
 ```
 
 ## 4. DGST КОМАНДЫ
@@ -140,7 +140,7 @@ diff test.txt o2c_decrypted.txt && echo "OpenSSL--CryptoCore CBC работае�
 
 ### 4.5 HMAC проверка (успешная)
 ```bash
-./cryptocore dgst --algorithm sha256 --hmac --key secret123 --input test.txt --verify test.hmac
+./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac && echo "✓ HMAC проверка успешна"
 ```
 
 ### 4.6 HMAC проверка (неудачная)
@@ -148,7 +148,7 @@ diff test.txt o2c_decrypted.txt && echo "OpenSSL--CryptoCore CBC работае�
 echo "tamper" >> test.txt
 ```
 ```
-./cryptocore dgst --algorithm sha256 --hmac --key secret123 --input test.txt --verify test.hmac 2>/dev/null || echo "HMAC обнаружил изменение"
+./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac 2>/dev/null || echo "✓ HMAC обнаружил изменение"
 ```
 
 ### 4.7 Восстановление файла
@@ -157,7 +157,7 @@ echo "tamper" >> test.txt
 head -n -1 test.txt > test_temp.txt && mv test_temp.txt test.txt
 ```
 ```
-./cryptocore dgst --algorithm sha256 --hmac --key secret123 --input test.txt --verify test.hmac && echo "Файл восстановлен, HMAC проверка снова успешна"
+./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac
 ```
 
 ## 5. DERIVE КОМАНДЫ
@@ -170,7 +170,7 @@ head -n -1 test.txt > test_temp.txt && mv test_temp.txt test.txt
 ### 5.2 Использование выведенного ключа для шифрования
 ```bash
 # Выводим ключ и берем первую часть (hex ключ)
-KEY=$(./cryptocore derive --password "MyPassword" --salt 1234567890abcdef --iterations 10000 --length 32 | cut -d' ' -f1)
+KEY=$(./cryptocore derive --password "MyPassword" --salt 1234567890abcdef --iterations 10000 --length 32 2>&1 | grep -E '^[0-9a-f]{64}$' | head -1)
 echo "Выведенный ключ: $KEY"
 ```
 ```
@@ -182,7 +182,7 @@ echo "Выведенный ключ: $KEY"
 ./cryptocore crypto --algorithm aes --mode cbc --operation decrypt --key $KEY --input test_pbkdf2.enc --output test_pbkdf2.dec
 ```
 ```
-diff test.txt test_pbkdf2.dec && echo "Шифрование PBKDF2-ключом работает"
+diff test.txt test_pbkdf2.dec
 ```
 
 ### 5.3 Выведение с авто-солью
@@ -192,5 +192,6 @@ diff test.txt test_pbkdf2.dec && echo "Шифрование PBKDF2-ключом 
 
 ### 5.4 Выведение ключа в файл
 ```bash
-./cryptocore derive --password "app_password" --salt fixedappsalt123456 --iterations 10000 --length 32 --output derived.key
+SALT_HEX=$(echo -n "fixedappsalt123456" | xxd -p)
+./cryptocore derive --password "app_password" --salt $SALT_HEX --iterations 10000 --length 32 --output derived.key
 ```
