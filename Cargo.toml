@@ -1,6 +1,6 @@
 [package]
 name = "cryptocore"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "Command-line utility for file encryption and decryption using AES-128 with AEAD support and key derivation"
 authors = ["feronski.bkpk@gmail.com"]

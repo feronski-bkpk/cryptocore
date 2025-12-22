@@ -1,3 +1,18 @@
+//! Cryptocore CLI Application
+//!
+//! This is the main entry point for the cryptocore command-line tool.
+//! It provides cryptographic operations including encryption, decryption,
+//! hashing, HMAC, and key derivation through a unified CLI interface.
+//!
+//! # Usage
+//!
+//! The application supports three main commands:
+//! 1. `crypto` - Symmetric encryption/decryption with various modes
+//! 2. `dgst` - Hashing and HMAC computation/verification
+//! 3. `derive` - Key derivation using PBKDF2
+//!
+//! For detailed usage information, run: `cryptocore --help`
+
 mod cli;
 mod crypto;
 mod csprng;
@@ -6,20 +21,35 @@ mod hash;
 mod mac;
 mod kdf;
 
+use anyhow::{anyhow, Result};
 use clap::Parser;
-use cli::{Cli, Command, Algorithm, Mode, Operation};
-use crypto::{BlockMode, Cbc, Cfb, Ofb, Ctr, Ecb, Gcm};
+use cli::{Algorithm, Cli, Command, Mode, Operation};
 use crypto::aead::EncryptThenMac;
+use crypto::{BlockMode, Cbc, Cfb, Ctr, Ecb, Gcm, Ofb};
 use csprng::Csprng;
-use file::{read_file, write_file, extract_iv_from_file, prepend_iv_to_data};
+use file::{extract_iv_from_file, prepend_iv_to_data, read_file, write_file};
 use hash::HashType;
 use kdf::pbkdf2_hmac_sha256;
-use anyhow::{Result, anyhow};
-use std::path::PathBuf;
-use hex;
 use std::io::Read;
+use std::path::PathBuf;
+
 use crate::hash::HashAlgorithm;
 
+/// Main entry point for the cryptocore application.
+///
+/// Parses command-line arguments, validates them, and dispatches to
+/// the appropriate handler function based on the selected command.
+///
+/// # Returns
+///
+/// * `Ok(())` - If the operation completes successfully
+/// * `Err(anyhow::Error)` - If any error occurs during processing
+///
+/// # Exit Codes
+///
+/// * `0` - Success
+/// * `1` - Validation error or cryptographic failure
+/// * `2` - I/O error or other runtime failure
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -62,8 +92,26 @@ fn main() -> Result<()> {
             });
 
             match operation {
-                Operation::Encrypt => handle_encryption(&mode, key, &input, output_path.as_ref(), iv, nonce, aad, base_mode)?,
-                Operation::Decrypt => handle_decryption(&mode, key, &input, output_path.as_ref(), iv, nonce, aad, base_mode)?,
+                Operation::Encrypt => handle_encryption(
+                    &mode,
+                    key,
+                    &input,
+                    output_path.as_ref(),
+                    iv,
+                    nonce,
+                    aad,
+                    base_mode,
+                )?,
+                Operation::Decrypt => handle_decryption(
+                    &mode,
+                    key,
+                    &input,
+                    output_path.as_ref(),
+                    iv,
+                    nonce,
+                    aad,
+                    base_mode,
+                )?,
             }
         }
         Command::Dgst {
@@ -91,6 +139,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Handles PBKDF2 key derivation operations.
+///
+/// Derives a cryptographic key from a password using PBKDF2-HMAC-SHA256.
+/// Supports both provided and randomly generated salts.
+///
+/// # Arguments
+///
+/// * `args` - Derivation parameters from CLI
+///
+/// # Returns
+///
+/// * `Ok(())` - If derivation completes successfully
+/// * `Err(anyhow::Error)` - If any error occurs during derivation
 fn handle_key_derivation(args: cli::DeriveArgs) -> Result<()> {
     println!("[INFO] Deriving key using PBKDF2-HMAC-SHA256");
     println!("[INFO] Password length: {} characters", args.password.len());
@@ -136,6 +197,23 @@ fn handle_key_derivation(args: cli::DeriveArgs) -> Result<()> {
     Ok(())
 }
 
+/// Handles encryption operations for all supported modes.
+///
+/// # Arguments
+///
+/// * `mode` - Encryption mode (ECB, CBC, CFB, OFB, CTR, GCM, ETM)
+/// * `key` - Optional key in hex format (generated if not provided)
+/// * `input_path` - Path to input file or "-" for stdin
+/// * `output_path` - Optional output path (auto-generated if not provided)
+/// * `iv` - Optional initialization vector (hex)
+/// * `nonce` - Optional nonce for GCM mode (hex)
+/// * `aad` - Optional additional authenticated data (hex)
+/// * `base_mode` - Base mode for ETM encryption
+///
+/// # Returns
+///
+/// * `Ok(())` - If encryption completes successfully
+/// * `Err(anyhow::Error)` - If any error occurs during encryption
 fn handle_encryption(
     mode: &Mode,
     key: Option<String>,
@@ -261,7 +339,10 @@ fn handle_encryption(
         Mode::Etm => {
             let base_mode = base_mode.unwrap_or(Mode::Cbc);
 
-            println!("[INFO] Using Encrypt-then-MAC mode with {:?} as base mode", base_mode);
+            println!(
+                "[INFO] Using Encrypt-then-MAC mode with {:?} as base mode",
+                base_mode
+            );
 
             let aead = EncryptThenMac::new(&key_hex)?;
 
@@ -317,6 +398,23 @@ fn handle_encryption(
     Ok(())
 }
 
+/// Handles decryption operations for all supported modes.
+///
+/// # Arguments
+///
+/// * `mode` - Decryption mode (ECB, CBC, CFB, OFB, CTR, GCM, ETM)
+/// * `key` - Required key in hex format for decryption
+/// * `input_path` - Path to input file or "-" for stdin
+/// * `output_path` - Optional output path (auto-generated if not provided)
+/// * `iv` - Optional initialization vector (hex, extracted from file if not provided)
+/// * `nonce` - Optional nonce for GCM mode (hex, not used in current implementation)
+/// * `aad` - Optional additional authenticated data (hex)
+/// * `base_mode` - Base mode for ETM decryption
+///
+/// # Returns
+///
+/// * `Ok(())` - If decryption completes successfully
+/// * `Err(anyhow::Error)` - If any error occurs during decryption
 fn handle_decryption(
     mode: &Mode,
     key: Option<String>,
@@ -327,7 +425,8 @@ fn handle_decryption(
     aad: Option<String>,
     base_mode: Option<Mode>,
 ) -> Result<()> {
-    let key_hex = key.ok_or_else(|| anyhow!("Key is required for decryption"))?
+    let key_hex = key
+        .ok_or_else(|| anyhow!("Key is required for decryption"))?
         .trim_start_matches('@')
         .to_string();
 
@@ -420,8 +519,9 @@ fn handle_decryption(
                 Err(e) => {
                     if e.to_string().contains("Authentication failed") {
                         if output_path.exists() {
-                            std::fs::remove_file(&output_path)
-                                .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
                         }
 
                         eprintln!("[ERROR] Authentication failed: tag mismatch or ciphertext tampered");
@@ -429,8 +529,9 @@ fn handle_decryption(
                         std::process::exit(1);
                     } else {
                         if output_path.exists() {
-                            std::fs::remove_file(&output_path)
-                                .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
                         }
                         return Err(e);
                     }
@@ -440,7 +541,10 @@ fn handle_decryption(
         Mode::Etm => {
             let base_mode = base_mode.unwrap_or(Mode::Cbc);
 
-            println!("[INFO] Using Encrypt-then-MAC mode with {:?} as base mode", base_mode);
+            println!(
+                "[INFO] Using Encrypt-then-MAC mode with {:?} as base mode",
+                base_mode
+            );
 
             let aead = EncryptThenMac::new(&key_hex)?;
 
@@ -456,101 +560,96 @@ fn handle_decryption(
             }
 
             match base_mode {
-                Mode::Cbc => {
-                    match aead.decrypt::<Cbc>(&input_data, &aad_bytes) {
-                        Ok(plaintext) => {
-                            write_file(&output_path, &plaintext)?;
-                            println!("[SUCCESS] ETM decryption completed successfully");
-                        }
-                        Err(e) if e.to_string().contains("Authentication failed") => {
-                            if output_path.exists() {
-                                std::fs::remove_file(&output_path)
-                                    .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
-                            }
-                            eprintln!("[ERROR] Authentication failed: MAC mismatch");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
+                Mode::Cbc => match aead.decrypt::<Cbc>(&input_data, &aad_bytes) {
+                    Ok(plaintext) => {
+                        write_file(&output_path, &plaintext)?;
+                        println!("[SUCCESS] ETM decryption completed successfully");
                     }
-                }
-                Mode::Ctr => {
-                    match aead.decrypt::<Ctr>(&input_data, &aad_bytes) {
-                        Ok(plaintext) => {
-                            write_file(&output_path, &plaintext)?;
-                            println!("[SUCCESS] ETM decryption completed successfully");
+                    Err(e) if e.to_string().contains("Authentication failed") => {
+                        if output_path.exists() {
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
                         }
-                        Err(e) if e.to_string().contains("Authentication failed") => {
-                            if output_path.exists() {
-                                std::fs::remove_file(&output_path)
-                                    .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
-                            }
-                            eprintln!("[ERROR] Authentication failed: MAC mismatch");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
+                        eprintln!("[ERROR] Authentication failed: MAC mismatch");
+                        std::process::exit(1);
                     }
-                }
-                Mode::Cfb => {
-                    match aead.decrypt::<Cfb>(&input_data, &aad_bytes) {
-                        Ok(plaintext) => {
-                            write_file(&output_path, &plaintext)?;
-                            println!("[SUCCESS] ETM decryption completed successfully");
-                        }
-                        Err(e) if e.to_string().contains("Authentication failed") => {
-                            if output_path.exists() {
-                                std::fs::remove_file(&output_path)
-                                    .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
-                            }
-                            eprintln!("[ERROR] Authentication failed: MAC mismatch");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
+                    Err(e) => {
+                        return Err(e);
                     }
-                }
-                Mode::Ofb => {
-                    match aead.decrypt::<Ofb>(&input_data, &aad_bytes) {
-                        Ok(plaintext) => {
-                            write_file(&output_path, &plaintext)?;
-                            println!("[SUCCESS] ETM decryption completed successfully");
-                        }
-                        Err(e) if e.to_string().contains("Authentication failed") => {
-                            if output_path.exists() {
-                                std::fs::remove_file(&output_path)
-                                    .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
-                            }
-                            eprintln!("[ERROR] Authentication failed: MAC mismatch");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
+                },
+                Mode::Ctr => match aead.decrypt::<Ctr>(&input_data, &aad_bytes) {
+                    Ok(plaintext) => {
+                        write_file(&output_path, &plaintext)?;
+                        println!("[SUCCESS] ETM decryption completed successfully");
                     }
-                }
-                Mode::Ecb => {
-                    match aead.decrypt::<Ecb>(&input_data, &aad_bytes) {
-                        Ok(plaintext) => {
-                            write_file(&output_path, &plaintext)?;
-                            println!("[SUCCESS] ETM decryption completed successfully");
+                    Err(e) if e.to_string().contains("Authentication failed") => {
+                        if output_path.exists() {
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
                         }
-                        Err(e) if e.to_string().contains("Authentication failed") => {
-                            if output_path.exists() {
-                                std::fs::remove_file(&output_path)
-                                    .unwrap_or_else(|_| eprintln!("[WARNING] Failed to delete output file"));
-                            }
-                            eprintln!("[ERROR] Authentication failed: MAC mismatch");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
+                        eprintln!("[ERROR] Authentication failed: MAC mismatch");
+                        std::process::exit(1);
                     }
-                }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                },
+                Mode::Cfb => match aead.decrypt::<Cfb>(&input_data, &aad_bytes) {
+                    Ok(plaintext) => {
+                        write_file(&output_path, &plaintext)?;
+                        println!("[SUCCESS] ETM decryption completed successfully");
+                    }
+                    Err(e) if e.to_string().contains("Authentication failed") => {
+                        if output_path.exists() {
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
+                        }
+                        eprintln!("[ERROR] Authentication failed: MAC mismatch");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                },
+                Mode::Ofb => match aead.decrypt::<Ofb>(&input_data, &aad_bytes) {
+                    Ok(plaintext) => {
+                        write_file(&output_path, &plaintext)?;
+                        println!("[SUCCESS] ETM decryption completed successfully");
+                    }
+                    Err(e) if e.to_string().contains("Authentication failed") => {
+                        if output_path.exists() {
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
+                        }
+                        eprintln!("[ERROR] Authentication failed: MAC mismatch");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                },
+                Mode::Ecb => match aead.decrypt::<Ecb>(&input_data, &aad_bytes) {
+                    Ok(plaintext) => {
+                        write_file(&output_path, &plaintext)?;
+                        println!("[SUCCESS] ETM decryption completed successfully");
+                    }
+                    Err(e) if e.to_string().contains("Authentication failed") => {
+                        if output_path.exists() {
+                            std::fs::remove_file(&output_path).unwrap_or_else(|_| {
+                                eprintln!("[WARNING] Failed to delete output file")
+                            });
+                        }
+                        eprintln!("[ERROR] Authentication failed: MAC mismatch");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                },
                 _ => {
                     return Err(anyhow!("Invalid base mode for ETM: {:?}", base_mode));
                 }
@@ -562,6 +661,18 @@ fn handle_decryption(
     Ok(())
 }
 
+/// Handles hashing operations (SHA-256 and SHA3-256).
+///
+/// # Arguments
+///
+/// * `hash_type` - Type of hash algorithm to use
+/// * `input_path` - Path to input file or "-" for stdin
+/// * `output` - Optional output file path (prints to stdout if not provided)
+///
+/// # Returns
+///
+/// * `Ok(())` - If hashing completes successfully
+/// * `Err(anyhow::Error)` - If any error occurs during hashing
 fn handle_hashing(hash_type: HashType, input_path: &PathBuf, output: Option<PathBuf>) -> Result<()> {
     let data = if input_path.to_str() == Some("-") {
         let mut buffer = Vec::new();
@@ -583,18 +694,46 @@ fn handle_hashing(hash_type: HashType, input_path: &PathBuf, output: Option<Path
     };
 
     if let Some(output_path) = output {
-        let output_str = format!("{}  {}\n", hash_hex,
-                                 if input_path.to_str() == Some("-") { "-" } else { input_path.to_str().unwrap() });
+        let output_str = format!(
+            "{}  {}\n",
+            hash_hex,
+            if input_path.to_str() == Some("-") {
+                "-"
+            } else {
+                input_path.to_str().unwrap()
+            }
+        );
         write_file(&output_path, output_str.as_bytes())?;
         println!("[INFO] Hash saved to: {}", output_path.display());
     } else {
-        println!("{}  {}", hash_hex,
-                 if input_path.to_str() == Some("-") { "-" } else { input_path.to_str().unwrap() });
+        println!(
+            "{}  {}",
+            hash_hex,
+            if input_path.to_str() == Some("-") {
+                "-"
+            } else {
+                input_path.to_str().unwrap()
+            }
+        );
     }
 
     Ok(())
 }
 
+/// Handles HMAC computation and verification.
+///
+/// # Arguments
+///
+/// * `_hash_type` - Hash type for HMAC (currently only SHA-256 is supported)
+/// * `key` - Required key for HMAC computation (hex format)
+/// * `input_path` - Path to input file or "-" for stdin
+/// * `output` - Optional output file path for HMAC value
+/// * `verify` - Optional verification file containing expected HMAC
+///
+/// # Returns
+///
+/// * `Ok(())` - If HMAC computation/verification completes successfully
+/// * `Err(anyhow::Error)` - If any error occurs during HMAC operations
 fn handle_hmac(
     _hash_type: HashType,
     key: Option<String>,
@@ -602,7 +741,8 @@ fn handle_hmac(
     output: Option<PathBuf>,
     verify: Option<PathBuf>,
 ) -> Result<()> {
-    let key_hex = key.ok_or_else(|| anyhow!("Key is required for HMAC"))?
+    let key_hex = key
+        .ok_or_else(|| anyhow!("Key is required for HMAC"))?
         .trim_start_matches('@')
         .to_string();
 
@@ -635,13 +775,27 @@ fn handle_hmac(
             std::process::exit(1);
         }
     } else if let Some(output_path) = output {
-        let output_str = format!("{}  {}\n", hmac_hex,
-                                 if input_path.to_str() == Some("-") { "-" } else { input_path.to_str().unwrap() });
+        let output_str = format!(
+            "{}  {}\n",
+            hmac_hex,
+            if input_path.to_str() == Some("-") {
+                "-"
+            } else {
+                input_path.to_str().unwrap()
+            }
+        );
         write_file(&output_path, output_str.as_bytes())?;
         println!("[INFO] HMAC saved to: {}", output_path.display());
     } else {
-        println!("{}  {}", hmac_hex,
-                 if input_path.to_str() == Some("-") { "-" } else { input_path.to_str().unwrap() });
+        println!(
+            "{}  {}",
+            hmac_hex,
+            if input_path.to_str() == Some("-") {
+                "-"
+            } else {
+                input_path.to_str().unwrap()
+            }
+        );
     }
 
     Ok(())
