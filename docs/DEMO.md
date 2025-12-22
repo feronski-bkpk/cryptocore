@@ -143,23 +143,6 @@ diff test.txt o2c_decrypted.txt
 ./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac
 ```
 
-### 4.6 HMAC проверка (неудачная)
-```bash
-echo "tamper" >> test.txt
-```
-```
-./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac 2>/dev/null
-```
-
-### 4.7 Восстановление файла
-```bash
-# Удаляем последнюю строку (изменение)
-head -n -1 test.txt > test_temp.txt && mv test_temp.txt test.txt
-```
-```
-./cryptocore dgst --algorithm sha256 --hmac --key 736563726574313233 --input test.txt --verify test.hmac
-```
-
 ## 5. DERIVE КОМАНДЫ
 
 ### 5.1 Базовое выведение ключа
